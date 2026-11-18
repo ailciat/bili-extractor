@@ -38,13 +38,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: |
           set -e
           TAG="v$(node -p "require('./package.json').version")"
-          EXE=$(ls dist/*.exe)
           NOTES="免安装 Windows exe，中文应用名与专属图标，双击即用、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。"
+          # 中文文件名用 glob 直接展开，不经变量传递，避免 locale 导致前缀丢失
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$EXE" --clobber
+            gh release upload "$TAG" dist/*.exe --clobber
           else
-            gh release create "$TAG" "$EXE" --title "哔哩提取器 $TAG" --notes "$NOTES"
+            gh release create "$TAG" dist/*.exe --title "哔哩提取器 $TAG" --notes "$NOTES"
           fi
