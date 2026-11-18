@@ -1,0 +1,21 @@
+# 依赖（体积大，别人 clone 后 npm install 即可）
+node_modules/
+
+# 本地配置：含加密后的登录凭证与用户信息，绝不入库
+config.json
+config.json.*
+
+# 下载产物
+downloads/*
+!downloads/.gitkeep
+
+# 日志与临时文件
+*.log
+*.part
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/

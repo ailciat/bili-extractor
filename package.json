@@ -1,0 +1,23 @@
+{
+  "name": "bili-extractor",
+  "version": "2.0.0",
+  "private": true,
+  "description": "提炼 · B站视频 / 音频 / 封面提取工具",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron ."
+  },
+  "keywords": [
+    "bilibili",
+    "video",
+    "audio",
+    "downloader",
+    "cover"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "qrcode": "^1.5.4"
+  }
+}

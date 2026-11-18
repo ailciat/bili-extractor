@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>提炼 · B站视频 / 音频 / 封面提取</title>
+<meta name="description" content="粘贴 B 站链接，提取视频、音频与封面原图。本地运行，零上传。" />
+<script src="/theme-init.js"></script>
+<link rel="stylesheet" href="/styles/tokens.css" />
+<link rel="stylesheet" href="/styles/base.css" />
+<link rel="stylesheet" href="/styles/app.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231976d2'/%3E%3Ctext x='16' y='23' font-size='18' font-weight='800' text-anchor='middle' fill='%23fff' font-family='sans-serif'%3E提%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<!-- 背景水泡：铺在内容之下，纯装饰 -->
+<canvas id="seaCanvas" aria-hidden="true"></canvas>
+
+<!-- ================= 顶部导航 ================= -->
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">提</span>
+      <span class="brand-text">
+        <span class="brand-name">提炼</span>
+        <span class="brand-sub">视频提取工具</span>
+      </span>
+    </div>
+
+    <div class="masthead-actions">
+      <button class="account-btn" id="btnAccount" aria-haspopup="dialog">
+        <span class="avatar-fallback" id="accountAvatarFallback" aria-hidden="true">游</span>
+        <img class="avatar" id="accountAvatar" alt="" hidden />
+        <span id="accountName">游客</span>
+      </button>
+
+      <button class="icon-btn theme-btn" id="btnTheme" aria-label="切换深色 / 浅色">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2"/>
+          <path d="M12 2.2v2.2M12 19.6v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.2 12h2.2M19.6 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.9A8.6 8.6 0 1 1 11.1 3a6.8 6.8 0 0 0 9.9 9.9z"/>
+        </svg>
+      </button>
+
+      <button class="icon-btn" id="btnSettings" aria-label="设置" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.9l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.9-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.9.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.9 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.11 1.7 1.7 0 0 0-.34-1.9l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.9.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.9-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.9V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <main>
+    <div class="layout">
+
+      <!-- 首屏标题：横跨两列，让左右两栏的卡片从同一条基线开始 -->
+      <section class="hero">
+        <h1 class="reveal">把视频<span class="mark">取</span>下来</h1>
+      </section>
+
+      <!-- ================= 左：主操作 ================= -->
+      <div class="col-main">
+
+        <!-- 输入台 -->
+        <section class="composer reveal" aria-label="链接输入">
+          <div class="composer-top">
+            <span class="label"><i aria-hidden="true"></i>输入区</span>
+            <div class="composer-tools">
+              <button class="text-btn" id="btnClearInput" type="button" hidden>清空</button>
+              <span class="count" id="inputCount">0 行</span>
+            </div>
+          </div>
+
+          <label class="sr-only" for="input">粘贴 B 站链接，每行一条</label>
+          <textarea id="input" spellcheck="false" autocomplete="off"
+            placeholder="https://www.bilibili.com/video/BV1GJ411x7h7&#10;BV1HTsn6xE3x&#10;每行一条，最多 30 条"></textarea>
+
+          <div class="composer-foot">
+            <div class="mode-switch" role="tablist" aria-label="提取类型">
+              <button role="tab" aria-selected="true" data-mode="video">视频</button>
+              <button role="tab" aria-selected="false" data-mode="audio">音频</button>
+              <button role="tab" aria-selected="false" data-mode="cover">封面</button>
+            </div>
+
+            <span class="hint" id="modeHint">输出 MP4 · 含音轨</span>
+
+            <button class="btn btn-primary" id="btnParse">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" aria-hidden="true">
+                <path d="M5 12h13M12 5.5L18.5 12 12 18.5"/>
+              </svg>
+              解析
+            </button>
+          </div>
+        </section>
+
+        <!-- 一行提示：把原来的长描述与能力标签合并在这里 -->
+        <p class="composer-hint reveal">
+          支持 BV 号、av 号、视频链接、b23.tv 短链与番剧，每行一条，最多 30 条
+        </p>
+
+        <!-- 首屏引导：未解析时填充空位，解析后让位给结果 -->
+        <section class="steps reveal" id="stepsRow" aria-label="使用步骤">
+          <article class="step">
+            <span class="step-no">01</span>
+            <span class="step-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13.5a4.2 4.2 0 0 0 6 0l2.6-2.6a4.2 4.2 0 0 0-6-6L11.3 6"/>
+                <path d="M14 10.5a4.2 4.2 0 0 0-6 0l-2.6 2.6a4.2 4.2 0 0 0 6 6l1.3-1.1"/>
+              </svg>
+            </span>
+            <div class="step-txt">
+              <b>粘贴链接</b>
+              <span>BV 号、av 号、b23.tv 短链都认</span>
+            </div>
+          </article>
+
+          <article class="step">
+            <span class="step-no">02</span>
+            <span class="step-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="3.5" width="16" height="17" rx="3"/>
+                <path d="M8 9h8M8 13h5"/>
+                <path d="M8 17.2l1.8 1.8 3.2-3.2"/>
+              </svg>
+            </span>
+            <div class="step-txt">
+              <b>挑分集与清晰度</b>
+              <span>多 P 视频可勾选多个分集一起下</span>
+            </div>
+          </article>
+
+          <article class="step">
+            <span class="step-no">03</span>
+            <span class="step-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3.5v11M7.5 10L12 14.5 16.5 10"/>
+                <path d="M4 17.5v1.6A1.9 1.9 0 0 0 5.9 21h12.2a1.9 1.9 0 0 0 1.9-1.9v-1.6"/>
+              </svg>
+            </span>
+            <div class="step-txt">
+              <b>下载到本机</b>
+              <span>视频、音频、封面分开存，不出本机</span>
+            </div>
+          </article>
+        </section>
+
+        <!-- 最近解析 -->
+        <div class="recent-row" id="recentRow" hidden>
+          <span class="recent-label">最近</span>
+          <div class="recent-list" id="recentList"></div>
+        </div>
+
+        <!-- 提示 -->
+        <div class="notice" id="notice" role="status" aria-live="polite">
+          <span id="noticeText"></span>
+        </div>
+
+        <!-- 解析结果 -->
+        <section class="section" id="resultSection" hidden>
+          <div class="section-head">
+            <span class="idx">02</span>
+            <h2>解析结果</h2>
+            <div class="meta">
+              <span id="resultMeta">—</span>
+            </div>
+          </div>
+
+          <!-- 清晰度说明：解释哪些档位需要什么条件 -->
+          <p class="hd-note" id="hdNote" hidden>
+            <span class="hd-tag">清晰度</span>
+            <span id="hdNoteText">—</span>
+          </p>
+
+          <!-- 单条详情 -->
+          <article class="detail" id="singleView" hidden>
+            <div class="detail-cover">
+              <img id="coverImg" alt="视频封面" />
+              <span class="dur" id="coverDur">0:00</span>
+            </div>
+
+            <!-- 分集：多选下载，落在封面下方的空位 -->
+            <div class="parts" id="partsWrap" hidden>
+              <div class="parts-head">
+                <span class="parts-label" id="partsLabel">分集</span>
+                <span class="parts-sum" id="partsSum">已选 1 / 1</span>
+                <div class="parts-tools">
+                  <button class="parts-act" id="btnPartsAll" type="button">全选</button>
+                  <button class="parts-act" id="btnPartsNone" type="button">清空</button>
+                </div>
+              </div>
+              <div class="part-list" id="partsList"></div>
+            </div>
+
+            <div class="detail-body">
+              <div class="detail-eyebrow">
+                <span id="dEyebrowId">—</span>
+                <i class="sep" aria-hidden="true"></i>
+                <span id="dEyebrowDate">—</span>
+                <i class="sep" aria-hidden="true"></i>
+                <span id="dEyebrowType">—</span>
+              </div>
+
+              <h2 class="detail-title" id="dTitle">—</h2>
+
+              <div class="detail-owner">
+                <img id="dAvatar" alt="" hidden />
+                <span class="owner-name" id="dOwner">—</span>
+                <span class="owner-fans" id="dFans" hidden></span>
+              </div>
+
+              <div class="detail-stats" id="dStats"></div>
+              <div class="detail-stats-more" id="dStatsMore" hidden></div>
+              <p class="detail-desc" id="dDesc" hidden></p>
+
+              <div class="detail-actions">
+                <div class="field-inline" id="qualityField">
+                  <label for="qualitySelect" id="qualityLabel">清晰度</label>
+                  <select class="select" id="qualitySelect">
+                    <option value="">读取中…</option>
+                  </select>
+                </div>
+
+                <button class="btn btn-primary" id="btnDownload">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 3.5v11M7.5 10L12 14.5 16.5 10"/>
+                    <path d="M4 17.5v1.6A1.9 1.9 0 0 0 5.9 21h12.2a1.9 1.9 0 0 0 1.9-1.9v-1.6"/>
+                  </svg>
+                  <span id="btnDownloadLabel">下载视频</span>
+                </button>
+
+                <button class="btn btn-ghost" id="btnCopyLink" title="复制原视频链接">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="12" height="12" rx="2.2"/>
+                    <path d="M5 15H4.2A2.2 2.2 0 0 1 2 12.8V4.2A2.2 2.2 0 0 1 4.2 2h8.6A2.2 2.2 0 0 1 15 4.2V5"/>
+                  </svg>
+                  链接
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <!-- 批量列表 -->
+          <div id="batchView" hidden>
+            <div class="batch-bar">
+              <label class="check">
+                <input type="checkbox" id="checkAll" />
+                <span aria-hidden="true"></span>
+                <span class="sr-only">全选</span>
+              </label>
+              <span class="num" id="batchCount" style="font-size:12px;font-weight:800;color:var(--ink-3)">0 / 0</span>
+
+              <div class="field-inline" id="batchQualityField" style="margin-left:auto">
+                <label for="batchQuality" id="batchQualityLabel">清晰度</label>
+                <select class="select" id="batchQuality">
+                  <option value="">默认</option>
+                </select>
+              </div>
+
+              <button class="btn btn-primary" id="btnBatchDownload">批量下载</button>
+            </div>
+
+            <ul class="batch-list" id="batchList"></ul>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- ================= 右：侧栏 ================= -->
+      <aside class="side">
+
+        <!-- 下载队列 -->
+        <section class="side-card reveal">
+          <div class="side-card-head">
+            <span class="idx" id="queueIdx">02</span>
+            <h2>下载队列</h2>
+            <span class="meta" id="queueMeta">空闲</span>
+          </div>
+
+          <ul class="task-list" id="taskList">
+            <li class="empty">
+              <div class="empty-mark">暂无任务</div>
+              <p>还没有任务<br />贴一条链接，点解析</p>
+            </li>
+          </ul>
+
+          <div class="queue-foot">
+            <button class="btn btn-ghost btn-mini" id="btnOpenFolder">打开文件夹</button>
+            <button class="btn btn-ghost btn-mini" id="btnClearDone">清空已完成</button>
+          </div>
+        </section>
+
+        <!-- 小贴士 -->
+        <section class="side-card reveal">
+          <div class="side-card-head">
+            <span class="idx" id="tipsIdx">03</span>
+            <h2>小贴士</h2>
+            <span class="meta">快捷键</span>
+          </div>
+          <ul class="tip-list">
+            <li><kbd>Ctrl</kbd><kbd>Enter</kbd><span>在输入框里直接解析</span></li>
+            <li><span class="dot" aria-hidden="true"></span><span>一条一行的链接会走批量模式</span></li>
+            <li><span class="dot" aria-hidden="true"></span><span>多 P 视频勾选后一次入队</span></li>
+            <li><span class="dot" aria-hidden="true"></span><span>封面取的是原图，不是缩略图</span></li>
+          </ul>
+        </section>
+
+      </aside>
+
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>本地运行 · 文件只落在你自己的硬盘</span>
+    <span class="lock"><i aria-hidden="true"></i><span id="footerMode">访客模式 · 最高 720P</span></span>
+  </footer>
+
+  <!-- 免责声明 -->
+  <section class="disclaimer" aria-label="免责声明">
+    <h3>免责声明</h3>
+    <p>
+      本工具为个人学习与技术研究而开发，仅供学习交流使用，请勿用于任何商业用途。
+      所下载的视频、音频、封面等内容的著作权均归原作者及哔哩哔哩平台所有，
+      请勿二次传播或用于侵权目的。
+    </p>
+    <p>
+      请在下载后于 24 小时内自行删除，并遵守《中华人民共和国著作权法》及哔哩哔哩用户协议。
+      使用者因使用本工具产生的一切后果与法律责任，由使用者自行承担。
+    </p>
+  </section>
+</div>
+
+<!-- ================= 登录弹窗 ================= -->
+<div class="modal-mask" id="loginMask" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2 id="loginTitle">扫码登录</h2>
+      </div>
+      <button class="icon-btn" id="btnCloseLogin" aria-label="关闭" style="width:34px;height:34px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <div id="loginQrArea">
+        <div class="qr-stage" id="qrStage">
+          <img id="qrImg" alt="B站登录二维码" />
+          <div class="qr-veil">
+            <div>
+              <div class="veil-text" id="veilText">二维码已失效</div>
+              <div class="veil-sub" id="veilSub">点击下方刷新</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="qr-status" aria-live="polite">
+          <span class="st" id="qrStatus"><span class="pulse" aria-hidden="true"></span>用 B 站手机客户端扫一扫</span>
+        </div>
+
+        <ol class="qr-steps">
+          <li>打开手机 B 站，点右上角「扫描」</li>
+          <li>扫码后手机上点「确认登录」</li>
+          <li>登录后即可解锁 1080P 及以上清晰度</li>
+        </ol>
+
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-ghost" id="btnRefreshQr" style="flex:1">刷新二维码</button>
+        </div>
+      </div>
+
+      <div id="loginUserArea" hidden>
+        <div class="account-card">
+          <img id="loginUserAvatar" alt="" />
+          <div class="who">
+            <b id="loginUserName">—</b>
+            <span id="loginUserMeta">—</span>
+          </div>
+        </div>
+        <button class="btn btn-ghost" id="btnLogout" style="width:100%">退出登录</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 设置弹窗 ================= -->
+<div class="modal-mask" id="settingsMask" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2 id="settingsTitle">设置</h2>
+      </div>
+      <button class="icon-btn" id="btnCloseSettings" aria-label="关闭" style="width:34px;height:34px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-row">
+        <label>下载保存位置</label>
+        <p class="hint">视频、音频与封面都保存到这里。</p>
+        <div class="dir-picker">
+          <div class="dir-value" id="dirValue">—</div>
+          <button class="btn btn-ghost" id="btnPickDir">选择文件夹</button>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="inputCookie">手动登录凭证（备用）</label>
+        <p class="hint">
+          扫码登录失败时的兜底方案。浏览器登录 bilibili.com 后，F12 → Application → Cookies →
+          复制 <code>SESSDATA</code> 的值粘贴到这里。
+        </p>
+        <input class="input-text" type="password" id="inputCookie" spellcheck="false" placeholder="留空表示不修改" />
+      </div>
+
+      <div class="form-row">
+        <label>背景效果</label>
+        <p class="hint">水泡缓慢上浮的轻微动效。关掉更安静，也能省点电。</p>
+        <label class="check-row">
+          <span class="check">
+            <input type="checkbox" id="inputSea" />
+            <span aria-hidden="true"></span>
+          </span>
+          <span>显示背景水泡</span>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label>本机保护</label>
+        <div class="sec-line" id="secLine" data-ok="true">
+          <span class="sec-dot" aria-hidden="true"></span>
+          <b id="secText">检查中…</b>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btnCancelSettings">取消</button>
+      <button class="btn btn-primary" id="btnSaveSettings">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 目录选择弹窗 ================= -->
+<div class="modal-mask" id="dirMask" role="dialog" aria-modal="true" aria-labelledby="dirTitle">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div>
+        <h2 id="dirTitle">选择保存位置</h2>
+      </div>
+      <button class="icon-btn" id="btnCloseDir" aria-label="关闭" style="width:34px;height:34px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <div class="dir-shortcuts" id="dirShortcuts"></div>
+
+      <div class="dir-bar">
+        <button class="btn btn-ghost btn-mini" id="btnDirUp">返回上级</button>
+        <span class="dir-path" id="dirPath">—</span>
+      </div>
+
+      <ul class="dir-list" id="dirList"></ul>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btnCancelDir">取消</button>
+      <button class="btn btn-primary" id="btnChooseDir">用这个文件夹</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script src="/sea-bubbles.js"></script>
+</body>
+</html>
