@@ -1860,6 +1860,7 @@ function bind() {
   const openFolder = async () => {
     try {
       await api('/api/open-folder');
+      notice('已打开下载文件夹', 'ok', 1800);
     } catch (e) {
       notice('打开文件夹失败：' + e.message, 'error', 4000);
     }

@@ -18,7 +18,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 /* ============================================================
  * 本机访问防护
@@ -2187,13 +2187,13 @@ async function handleApi(req, res, url) {
     if (p === '/api/open-folder') {
       await ensureDownloadDir();
       const dir = path.resolve(downloadDir());
-      // 用 execFile 传参数数组，路径里出现引号或分号也不会被当成命令
-      if (process.platform === 'win32') {
-        execFile('explorer.exe', [dir], { windowsHide: true }, () => {});
-      } else if (process.platform === 'darwin') {
-        execFile('open', [dir], () => {});
-      } else {
-        execFile('xdg-open', [dir], () => {});
+      try {
+        await openLocalTarget(dir);
+      } catch (e) {
+        return sendJSON(res, 500, {
+          ok: false,
+          error: '无法打开文件夹：' + (e.message || e.code || '未知错误'),
+        });
       }
       return sendJSON(res, 200, { ok: true, data: { dir } });
     }
@@ -2257,19 +2257,48 @@ function publicTask(t) {
  * 启动
  * ============================================================ */
 
-function openBrowser(target) {
-  try {
-    // 一律用 execFile 传参数数组，避免把 URL 拼进命令行
-    if (process.platform === 'win32') {
-      execFile('explorer.exe', [target], { windowsHide: true }, () => {});
-    } else if (process.platform === 'darwin') {
-      execFile('open', [target], () => {});
-    } else {
-      execFile('xdg-open', [target], () => {});
+/**
+ * 打开本机目录或链接。
+ * ------------------------------------------------------------
+ * Windows 下不能用 windowsHide：它会把 explorer 的窗口一起藏掉，
+ * 表现就是接口返回成功、用户却「什么都没发生」。
+ * 另外 explorer.exe 正常唤起后经常以退出码 1 结束，所以只看 spawn 错误，
+ * 不看 exit code —— 否则会误报失败。
+ */
+function openLocalTarget(target) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      if (process.platform === 'win32') {
+        const explorer = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+        child = spawn(explorer, [target], { detached: true, stdio: 'ignore' });
+      } else if (process.platform === 'darwin') {
+        child = spawn('open', [target], { detached: true, stdio: 'ignore' });
+      } else {
+        child = spawn('xdg-open', [target], { detached: true, stdio: 'ignore' });
+      }
+    } catch (e) {
+      return reject(e);
     }
-  } catch {
-    /* 打不开浏览器不影响服务本身 */
-  }
+
+    let settled = false;
+    child.once('error', (e) => {
+      if (settled) return;
+      settled = true;
+      reject(e);
+    });
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+function openBrowser(target) {
+  // 打不开浏览器不该影响服务启动，静默降级即可
+  openLocalTarget(target).catch(() => {});
 }
 
 function main() {
