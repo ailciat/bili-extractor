@@ -35,18 +35,55 @@ jobs:
           if-no-files-found: error
 
       - name: 发布到 Releases
+        # 不用 gh：它在 Windows 上传 multipart 时会丢掉中文文件名前缀。
+        # 直接走 GitHub API，中文资源名经 URL 编码传递，稳定保留。
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LANG: C.UTF-8
-          LC_ALL: C.UTF-8
         run: |
-          set -e
-          TAG="v$(node -p "require('./package.json').version")"
-          NOTES="免安装 Windows exe，中文应用名与专属图标，双击即用、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。"
-          # 中文文件名用 glob 直接展开，不经变量传递，避免 locale 导致前缀丢失
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.exe --clobber
-          else
-            gh release create "$TAG" dist/*.exe --title "哔哩提取器 $TAG" --notes "$NOTES"
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const ver = require('./package.json').version;
+          const tag = 'v' + ver;
+          const assetName = '哔哩提取器-' + ver + '-win-x64.exe';
+          const token = process.env.GH_TOKEN;
+          const H = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+          const api = 'https://api.github.com/repos/ailciat/bili-extractor';
+
+          async function main() {
+            let rel;
+            const get = await fetch(api + '/releases/tags/' + tag, { headers: H });
+            if (get.ok) {
+              rel = await get.json();
+            } else {
+              const post = await fetch(api + '/releases', {
+                method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  tag_name: tag,
+                  name: '哔哩提取器 ' + tag,
+                  body: '免安装 Windows exe，中文应用名与专属图标，双击即用、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。'
+                })
+              });
+              if (!post.ok) throw new Error('创建 Release 失败 ' + post.status + ' ' + await post.text());
+              rel = await post.json();
+            }
+            // 删掉同名或旧命名（如 '-2.0.0-win-x64.exe'）的 exe 资源，避免重复
+            for (const a of rel.assets || []) {
+              if (a.name.endsWith('.exe')) {
+                await fetch(api + '/releases/assets/' + a.id, { method: 'DELETE', headers: H });
+              }
+            }
+            const exe = fs.readdirSync('dist').find(f => f.toLowerCase().endsWith('.exe'));
+            if (!exe) throw new Error('dist 下没有 exe');
+            const buf = fs.readFileSync('dist/' + exe);
+            const url = rel.upload_url.split('{')[0] + '?name=' + encodeURIComponent(assetName);
+            const up = await fetch(url, {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) },
+              body: buf
+            });
+            if (!up.ok) throw new Error('上传失败 ' + up.status + ' ' + await up.text());
+            console.log('已发布到 Releases: ' + assetName);
+          }
+          main().catch(e => { console.error(e); process.exit(1); });
+          NODE
