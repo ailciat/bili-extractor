@@ -7,6 +7,8 @@ jobs:
   build:
     name: 打包 Windows 免安装版
     runs-on: windows-latest
+    permissions:
+      contents: write   # 允许推送 tag 与创建 Release
 
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +27,24 @@ jobs:
       - name: 打包 portable exe
         run: npm run app:pack
 
-      - name: 上传 exe
+      - name: 上传 exe（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
           name: bili-extractor-win-x64
           path: dist/*.exe
           if-no-files-found: error
+
+      - name: 发布到 Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="v$(node -p "require('./package.json').version")"
+          EXE=$(ls dist/*.exe)
+          NOTES="免安装 Windows exe，中文应用名与专属图标，双击即用、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$EXE" --clobber
+          else
+            gh release create "$TAG" "$EXE" --title "哔哩提取器 $TAG" --notes "$NOTES"
+          fi
