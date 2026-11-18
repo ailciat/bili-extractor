@@ -17,7 +17,7 @@
 
 ### 方式一：桌面应用 exe（推荐）
 
-拿到 `哔哩提取器-<版本>-win-x64.exe` 后（获取方式见下方「构建 Windows exe」），**双击即用**：不用安装、不用解压、不用装 Node。
+到仓库 [Releases](https://github.com/ailciat/bili-extractor/releases) 下载 `哔哩提取器-<版本>-win-x64.exe`，**双击即用**：不用安装、不用解压、不用装 Node。
 配置和下载默认放在 `C:\Users\<你的用户名>\.bili-extractor\`，可在设置里改。
 exe 未做代码签名，Windows 首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。
 
@@ -339,10 +339,14 @@ GitHub Actions 在每次推送和 PR 时跑同一套检查（见 `.github/workfl
 
 ### 构建 Windows exe
 
-打包工作流是**手动触发**的，不会拖慢日常 CI：打开
+**直接下载**：打开仓库的 [Releases](https://github.com/ailciat/bili-extractor/releases)，
+在最新发行版里下载 `哔哩提取器-<版本>-win-x64.exe` 即可（约 86MB，免登录、不会过期）。
+中文应用名与图标都齐全，双击即用。
+
+**自己构建**：打包工作流是**手动触发**的，不会拖慢日常 CI：打开
 [Build exe](https://github.com/ailciat/bili-extractor/actions/workflows/build-exe.yml)，
-点 **Run workflow**，跑完在本次运行的 artifact（名 `bili-extractor-win-x64`）里下载
-`哔哩提取器-<版本>-win-x64.exe`。工作流会自动带上仓库里的 `build/icon.ico`，中文应用名与图标都齐全。
+点 **Run workflow**，跑完会自动把 exe 发布到 Releases（同时留一份 artifact 名 `bili-extractor-win-x64`）。
+工作流会自动带上仓库里的 `build/icon.ico`，中文应用名与图标都齐全。
 
 本地打包（需要 Windows）：
 
