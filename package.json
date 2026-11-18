@@ -10,6 +10,7 @@
     "check": "node scripts/ci-check.js",
     "pack": "node scripts/pack.js",
     "app:pack": "electron-builder --win portable",
+    "app:zip": "node scripts/make-zip.js",
     "deps:check": "node scripts/ensure-deps.js --check"
   },
   "keywords": [

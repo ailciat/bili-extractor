@@ -17,7 +17,8 @@
 
 ### 方式一：桌面应用 exe（推荐）
 
-到仓库 [Releases](https://github.com/ailciat/bili-extractor/releases) 下载 `哔哩提取器-<版本>-win-x64.exe`，**双击即用**：不用安装、不用解压、不用装 Node。
+到仓库 [Releases](https://github.com/ailciat/bili-extractor/releases) 下载 `bili-extractor-<版本>-win-x64.zip`，
+解压后双击里面的 **`哔哩提取器-<版本>-win-x64.exe`** 即用：不用安装、不用装 Node。
 配置和下载默认放在 `C:\Users\<你的用户名>\.bili-extractor\`，可在设置里改。
 exe 未做代码签名，Windows 首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。
 
@@ -309,12 +310,13 @@ bili-extractor/
 ├── scripts/
 │   ├── ci-check.js       # 静态自检（CI 与 npm run check 共用）
 │   ├── ensure-deps.js    # 依赖自检 / 首次自动安装
-│   └── pack.js           # 打便携包（含 node_modules）
-├── .github/workflows/    # ci.yml 自检；build-exe.yml 手动打包 exe
+│   ├── pack.js           # 打便携包（含 node_modules）
+│   └── make-zip.js       # 把中文名 exe 打成英文名 zip（发布用）
+├── .github/workflows/    # ci.yml 自检；build-exe.yml 手动打包并发布
 ├── public/assets/bg.jpg  # 背景插画
 ├── node_modules/         # 依赖（qrcode 二维码、ffmpeg 二进制）
 ├── downloads/            # 下载的文件
-├── dist/                 # 打包产物（exe 与便携 zip，均不入库）
+├── dist/                 # 打包产物（exe、发布 zip 与便携 zip，均不入库）
 └── config.json           # 登录凭证与设置（首次保存时生成，勿外传，已加入 .gitignore）
 ```
 
@@ -340,25 +342,29 @@ GitHub Actions 在每次推送和 PR 时跑同一套检查（见 `.github/workfl
 ### 构建 Windows exe
 
 **直接下载**：打开仓库的 [Releases](https://github.com/ailciat/bili-extractor/releases)，
-在最新发行版里下载 `哔哩提取器-<版本>-win-x64.exe` 即可（约 86MB，免登录、不会过期）。
-中文应用名与图标都齐全，双击即用。
+在最新发行版里下载 `bili-extractor-<版本>-win-x64.zip`（约 86MB，免登录、不会过期），
+解压后双击里面的 **`哔哩提取器-<版本>-win-x64.exe`** 即可。中文应用名与图标都齐全，不用安装。
+
+> 为什么外面是英文 zip、里面才是中文 exe：GitHub 发布资源时会吞掉文件名里的中文前缀，
+> 所以把中文名放进 zip 内部，解压后照样拿到中文程序。
 
 **自己构建**：打包工作流是**手动触发**的，不会拖慢日常 CI：打开
 [Build exe](https://github.com/ailciat/bili-extractor/actions/workflows/build-exe.yml)，
-点 **Run workflow**，跑完会自动把 exe 发布到 Releases（同时留一份 artifact 名 `bili-extractor-win-x64`）。
+点 **Run workflow**，跑完会自动把 zip 发布到 Releases（同时留一份 artifact 名 `bili-extractor-win-x64`）。
 工作流会自动带上仓库里的 `build/icon.ico`，中文应用名与图标都齐全。
 
 本地打包（需要 Windows）：
 
 ```bash
 npm install
-npm run app:pack
+npm run app:pack    # 打中文名 exe
+npm run app:zip     # 套一层英文名 zip
 ```
 
-产物是 `dist/哔哩提取器-<版本>-win-x64.exe`（约 86MB），中文文件名与中文应用名，自带图标，双击即可，不依赖 Node。
-打包跳过了代码签名，因此本地构建不需要管理员权限；代价是首次运行会触发 SmartScreen 提示。
-`npm run pack` 仍可打旧的便携 zip（约 23MB，解压后双击 `启动.bat`）。
-桌面壳启动时会在 `%USERPROFILE%\.bili-extractor\` 下保存配置和下载文件，不会写进 exe 自身。
+产物是 `dist/bili-extractor-<版本>-win-x64.zip`，里面是 `哔哩提取器-<版本>-win-x64.exe`（约 86MB，
+中文应用名与图标，不依赖 Node）。打包跳过代码签名，本地构建不需要管理员权限；
+代价是首次运行会触发 SmartScreen 提示。`npm run pack` 仍可打旧的轻量便携 zip（约 23MB，
+解压后双击 `启动.bat`）。桌面壳启动时会在 `%USERPROFILE%\.bili-extractor\` 下保存配置和下载文件，不会写进 exe 自身。
 
 ---
 

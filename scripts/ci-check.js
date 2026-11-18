@@ -43,6 +43,7 @@ const JS_FILES = [
   'scripts/ci-check.js',
   'scripts/ensure-deps.js',
   'scripts/pack.js',
+  'scripts/make-zip.js',
 ];
 
 console.log('\n[1/4] JS 语法');

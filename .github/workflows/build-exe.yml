@@ -27,16 +27,19 @@ jobs:
       - name: 打包 portable exe
         run: npm run app:pack
 
-      - name: 上传 exe（Actions artifact）
+      - name: 打成英文名 zip（内部保留中文 exe）
+        run: npm run app:zip
+
+      - name: 上传 zip（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
           name: bili-extractor-win-x64
-          path: dist/*.exe
+          path: dist/bili-extractor-*-win-x64.zip
           if-no-files-found: error
 
       - name: 发布到 Releases
-        # 不用 gh：它在 Windows 上传 multipart 时会丢掉中文文件名前缀。
-        # 直接走 GitHub API，中文资源名经 URL 编码传递，稳定保留。
+        # 资源名用纯英文名：GitHub 的 upload 端点会剥掉非 ASCII 前缀。
+        # 中文名保留在 zip 内部的 exe 上（UTF-8 标志写入），解压即得中文程序。
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,7 +48,7 @@ jobs:
           const fs = require('fs');
           const ver = require('./package.json').version;
           const tag = 'v' + ver;
-          const assetName = '哔哩提取器-' + ver + '-win-x64.exe';
+          const zipName = 'bili-extractor-' + ver + '-win-x64.zip';
           const token = process.env.GH_TOKEN;
           const H = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
           const api = 'https://api.github.com/repos/ailciat/bili-extractor';
@@ -61,39 +64,26 @@ jobs:
                 body: JSON.stringify({
                   tag_name: tag,
                   name: '哔哩提取器 ' + tag,
-                  body: '免安装 Windows exe，中文应用名与专属图标，双击即用、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。'
+                  body: '免安装 Windows 版，下载 zip 解压后双击「哔哩提取器-' + ver + '-win-x64.exe」即用，无需安装、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。'
                 })
               });
               if (!post.ok) throw new Error('创建 Release 失败 ' + post.status + ' ' + await post.text());
               rel = await post.json();
             }
-            // 删掉同名或旧命名（如 '-2.0.0-win-x64.exe'）的 exe 资源，避免重复
+            // 清掉旧资源（含中文名丢失的坏 exe 与旧 zip），保证 Release 只留干净的一个
             for (const a of rel.assets || []) {
-              if (a.name.endsWith('.exe')) {
-                await fetch(api + '/releases/assets/' + a.id, { method: 'DELETE', headers: H });
-              }
+              await fetch(api + '/releases/assets/' + a.id, { method: 'DELETE', headers: H });
             }
-            const exe = fs.readdirSync('dist').find(f => f.toLowerCase().endsWith('.exe'));
-            if (!exe) throw new Error('dist 下没有 exe');
-            const buf = fs.readFileSync('dist/' + exe);
-            // 上传用纯 ASCII 名：GitHub 的 upload 端点会剥掉 ?name= 里的非 ASCII 前缀
-            const asciiName = 'app-' + ver + '-win-x64.exe';
-            const url = rel.upload_url.split('{')[0] + '?name=' + asciiName;
+            if (!fs.existsSync('dist/' + zipName)) throw new Error('dist 下没有 ' + zipName);
+            const buf = fs.readFileSync('dist/' + zipName);
+            const url = rel.upload_url.split('{')[0] + '?name=' + zipName;
             const up = await fetch(url, {
               method: 'POST',
-              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) },
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/zip', 'Content-Length': String(buf.length) },
               body: buf
             });
             if (!up.ok) throw new Error('上传失败 ' + up.status + ' ' + await up.text());
-            const asset = await up.json();
-            // 再用 PATCH 把资源名改成中文（JSON body 传中文不受 upload 端点限制）
-            const patch = await fetch(api + '/releases/assets/' + asset.id, {
-              method: 'PATCH',
-              headers: { ...H, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: assetName })
-            });
-            if (!patch.ok) throw new Error('重命名资源失败 ' + patch.status + ' ' + await patch.text());
-            console.log('已发布到 Releases: ' + (await patch.json()).name);
+            console.log('已发布到 Releases: ' + (await up.json()).name + '（内部 exe 为中文名）');
           }
           main().catch(e => { console.error(e); process.exit(1); });
           NODE
