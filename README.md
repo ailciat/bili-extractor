@@ -13,16 +13,22 @@
 
 ## 快速开始
 
-> 三种方式都需要 Node.js 18 以上（[下载](https://nodejs.org/zh-cn)），它负责跑本地服务。
+> exe 和便携包都不需要装 Node.js；只有从源码运行时才需要 Node.js 18 以上（[下载](https://nodejs.org/zh-cn)）。
 
-### 方式一：便携包（推荐给不熟 npm 的人）
+### 方式一：桌面应用 exe（推荐）
+
+下载 Releases 里的 `bili-extractor-<版本>-win-x64.exe`，**双击即用**：不用安装、不用解压、不用装 Node。
+配置和下载默认放在 `C:\Users\<你的用户名>\.bili-extractor\`，可在设置里改。
+exe 未做代码签名，Windows 首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。
+
+### 方式二：便携包
 
 下载 Releases 里的 `bili-extractor-v?.?.?-win32-x64.zip`（或自己用 `npm run pack` 打一个），
 **解压后双击 `启动.bat`** 即可。依赖已经打包在里面，不需要 `npm install`，也不用联网装包。
 
 macOS / Linux 用同一个仓库，解压后执行 `./start.sh`。
 
-### 方式二：clone 后双击
+### 方式三：clone 后双击
 
 ```bash
 git clone https://github.com/ailciat/bili-extractor.git
@@ -31,7 +37,7 @@ git clone https://github.com/ailciat/bili-extractor.git
 双击 `启动.bat`（Windows）或 `./start.sh`。**首次运行会自动安装依赖**（约 64MB，只装一次），
 之后每次启动只是秒级检查，不会重复下载。官方源超时会自动换国内镜像重试。
 
-### 方式三：手动
+### 方式四：手动
 
 ```bash
 npm install
@@ -139,7 +145,9 @@ B 站对 1080P 以上只给 DASH 分离流（画面和声音分成两个文件�
 
 ## 文件保存在哪
 
-默认在程序目录下的 `downloads/`。侧栏队列底部的「打开文件夹」直达（悬停可看当前路径），或在设置里改成别的位置。
+源码 / 便携包版默认在程序目录下的 `downloads/`；exe 版在 `C:\Users\<你的用户名>\.bili-extractor\downloads\`
+（exe 跑在临时解压目录里，放用户目录才不会退出就丢）。侧栏队列底部的「打开文件夹」直达，
+或在设置里改成别的位置。登录凭证同样存在这些目录下的 `config.json`。
 
 命名规则：
 
@@ -301,11 +309,11 @@ bili-extractor/
 │   ├── ci-check.js       # 静态自检（CI 与 npm run check 共用）
 │   ├── ensure-deps.js    # 依赖自检 / 首次自动安装
 │   └── pack.js           # 打便携包（含 node_modules）
-├── .github/workflows/    # GitHub Actions：每次推送跑自检
+├── .github/workflows/    # ci.yml 自检；build-exe.yml 手动打包 exe
 ├── public/assets/bg.jpg  # 背景插画
 ├── node_modules/         # 依赖（qrcode 二维码、ffmpeg 二进制）
 ├── downloads/            # 下载的文件
-├── dist/                 # 便携包产物（npm run pack 生成，不入库）
+├── dist/                 # 打包产物（exe 与便携 zip，均不入库）
 └── config.json           # 登录凭证与设置（首次保存时生成，勿外传，已加入 .gitignore）
 ```
 
@@ -327,6 +335,24 @@ npm run check
 | 内联脚本 | 严格 CSP 不允许内联 `<script>`，加进去不会执行也不报错 |
 
 GitHub Actions 在每次推送和 PR 时跑同一套检查（见 `.github/workflows/ci.yml`）。
+
+### 构建 Windows exe
+
+打包工作流是**手动触发**的，不会拖慢日常 CI：打开
+[Build exe](https://github.com/ailciat/bili-extractor/actions/workflows/build-exe.yml)，
+点 **Run workflow**，跑完在本次运行的 artifact 里下载 `bili-extractor-win-x64`。
+
+本地打包（需要 Windows）：
+
+```bash
+npm install
+npm run app:pack
+```
+
+产物是 `dist/bili-extractor-<版本>-win-x64.exe`（约 86MB），双击即可，不依赖 Node。
+打包跳过了代码签名，因此本地构建不需要管理员权限；代价是首次运行会触发 SmartScreen 提示。
+`npm run pack` 仍可打旧的便携 zip（约 23MB，解压后双击 `启动.bat`）。
+桌面壳启动时会在 `%USERPROFILE%\.bili-extractor\` 下保存配置和下载文件，不会写进 exe 自身。
 
 ---
 

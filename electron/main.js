@@ -7,6 +7,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 let serverProc = null;
 let win = null;
+let listenUrl = null;
 
 /** 用独立的 Node 进程跑本地服务，避免阻塞 Electron 主进程 */
 function startServer() {
@@ -15,12 +16,22 @@ function startServer() {
     env: {
       ...process.env,
       PORT: String(PORT),
-      NO_OPEN: '1',          // 由 Electron 自己显示窗口，不再唤起浏览器
+      NO_OPEN: '1',            // 由 Electron 自己显示窗口，不再唤起浏览器
+      BILI_APP_IPC: '1',       // 让服务回报实际监听地址
       ELECTRON_RUN_AS_NODE: '1',
     },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+
+  let stdout = '';
+  serverProc.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+    const found = stdout.match(/LISTENING=(http:\/\/127\.0\.0\.1:\d+)/);
+    if (found) listenUrl = found[1];
+  });
+  // 有管道就有人读，别让服务端日志把缓冲区堵满
+  serverProc.stderr.resume();
   serverProc.on('error', (e) => {
     dialog.showErrorBox('启动失败', '本地服务无法启动：' + e.message);
   });
@@ -30,11 +41,13 @@ function startServer() {
 async function waitForServer(timeoutMs = 15000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    try {
-      const res = await fetch(BASE + '/api/ping');
-      if (res.ok) return true;
-    } catch {
-      /* 还没起来，继续等 */
+    if (listenUrl) {
+      try {
+        const res = await fetch(listenUrl + '/api/ping');
+        if (res.ok) return true;
+      } catch {
+        /* 还没起来，继续等 */
+      }
     }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -68,7 +81,7 @@ async function createWindow() {
     app.quit();
     return;
   }
-  win.loadURL(BASE);
+  win.loadURL(listenUrl || BASE);
 }
 
 app.whenReady().then(() => {

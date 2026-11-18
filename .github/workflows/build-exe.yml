@@ -1,0 +1,33 @@
+name: Build exe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: 打包 Windows 免安装版
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 语法 / DOM id / CSS 变量 / CSP
+        run: node scripts/ci-check.js
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 打包 portable exe
+        run: npm run app:pack
+
+      - name: 上传 exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-extractor-win-x64
+          path: dist/*.exe
+          if-no-files-found: error

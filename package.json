@@ -9,6 +9,7 @@
     "app": "electron .",
     "check": "node scripts/ci-check.js",
     "pack": "node scripts/pack.js",
+    "app:pack": "electron-builder --win portable",
     "deps:check": "node scripts/ensure-deps.js --check"
   },
   "keywords": [
@@ -22,5 +23,37 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.ailciat.bili-extractor",
+    "productName": "哔哩提取器",
+    "asar": false,
+    "artifactName": "bili-extractor-${version}-win-x64.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "electron/**/*",
+      "public/**/*",
+      "scripts/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }

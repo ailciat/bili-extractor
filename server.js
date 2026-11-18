@@ -263,8 +263,12 @@ const UA =
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const CONFIG_PATH = path.join(ROOT, 'config.json');
-const DEFAULT_DOWNLOAD_DIR = path.join(ROOT, 'downloads');
+
+// 桌面版跑在 exe 的临时解压目录里，配置和下载必须落到用户目录，退出后才不会丢
+const PACKAGED = process.env.ELECTRON_RUN_AS_NODE === '1' || process.env.BILI_APP_IPC === '1';
+const DATA_ROOT = PACKAGED ? path.join(os.homedir(), '.bili-extractor') : ROOT;
+const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
+const DEFAULT_DOWNLOAD_DIR = path.join(DATA_ROOT, 'downloads');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -398,6 +402,7 @@ async function saveConfig() {
     cookieEnc: encryptSecret(config.cookie || ''),
     user: config.user || null,
   };
+  await fsp.mkdir(DATA_ROOT, { recursive: true });
   await fsp.writeFile(CONFIG_PATH, JSON.stringify(out, null, 2), 'utf8');
   tightenConfigPermissions();
 }
@@ -2377,6 +2382,8 @@ function main() {
       await initGuestCookie();
 
       const url = `http://127.0.0.1:${port}`;
+      // 桌面壳靠这一行拿到真实端口（7788 被占用时服务会自动顺延）
+      if (process.env.BILI_APP_IPC === '1') console.log('LISTENING=' + url);
       console.log('');
       console.log('  ┌─────────────────────────────────────────┐');
       console.log('  │   哔哩提取器 · B站视频/封面提取工具     │');
