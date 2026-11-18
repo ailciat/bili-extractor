@@ -58,12 +58,54 @@ function isLocalOrigin(origin) {
   }
 }
 
+/* ============================================================
+ * 演示模式（部署到公网创空间时使用）
+ * ------------------------------------------------------------
+ * 本程序原本是「本机工具」：只监听 127.0.0.1、能写盘、存登录态。
+ * 放到公网容器里必须收住三件事，否则要么跑不起来，要么变成
+ * 一台任何人都能用的下载代理：
+ *   1. 绑定 0.0.0.0 并放开 Host 校验（域名由平台分配，无法预知）
+ *   2. 关闭登录与设置写入 —— 绝不让别人的凭证落到服务器上
+ *   3. 关闭下载 / 文件浏览等能触碰磁盘的接口
+ * 只保留解析类接口：视频信息、分集、清晰度、封面预览。
+ * ============================================================ */
+
+const DEMO = process.env.STUDIO_DEMO === '1';
+
+/** 演示模式下不允许调用的接口前缀 */
+const DEMO_BLOCKED = [
+  '/api/download',
+  '/api/login',
+  '/api/logout',
+  '/api/open-folder',
+  '/api/fs/',
+  '/api/cancel',
+];
+
+function demoBlocked(pathname) {
+  return DEMO_BLOCKED.some((p) => pathname === p || pathname.startsWith(p));
+}
+
 /** 返回 null 表示放行，否则返回拒绝原因 */
 function rejectReason(req) {
-  if (!isLocalHostHeader(req.headers.host)) return 'host';
+  // 演示模式：域名由平台分配，Host 无法预先枚举，交给 Origin 校验兜底
+  if (!DEMO && !isLocalHostHeader(req.headers.host)) return 'host';
 
   const origin = req.headers.origin;
-  if (origin && !isLocalOrigin(origin)) return 'origin';
+  if (origin) {
+    if (DEMO) {
+      // 只接受「同源」请求（页面自己发起的）
+      try {
+        const o = new URL(origin);
+        const h = hostnameOf(req.headers.host);
+        if (h && o.hostname !== h) return 'origin';
+      } catch {
+        return 'origin';
+      }
+    } else if (!isLocalOrigin(origin)) {
+      return 'origin';
+    }
+  }
 
   const method = (req.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {
@@ -1543,6 +1585,22 @@ async function handleApi(req, res, url) {
   const p = url.pathname;
   const q = url.searchParams;
 
+  // 演示模式：所有会碰磁盘或存凭证的接口一律拒绝
+  if (DEMO && demoBlocked(p)) {
+    return sendJSON(res, 403, {
+      ok: false,
+      error: '在线演示版只提供解析，下载请在本机运行',
+    });
+  }
+
+  // 配置只读：不允许改保存位置、不允许写入任何凭证
+  if (DEMO && p === '/api/config' && (req.method || 'GET').toUpperCase() !== 'GET') {
+    return sendJSON(res, 403, {
+      ok: false,
+      error: '在线演示版不支持修改设置',
+    });
+  }
+
   try {
     /* ---------- 登录：申请二维码 ---------- */
     if (p === '/api/login/qr' && req.method === 'POST') {
@@ -1727,6 +1785,7 @@ async function handleApi(req, res, url) {
             user: config.cookie ? config.user : null,
             queue: queueStatus(),
             hasFfmpeg: Boolean(FFMPEG_PATH),
+            demo: DEMO,
           },
         });
       }
@@ -1890,6 +1949,7 @@ async function handleApi(req, res, url) {
           user: config.cookie ? config.user : null,
           queue: queueStatus(),
           hasFfmpeg: Boolean(FFMPEG_PATH),
+          demo: DEMO,
         },
       });
     }
@@ -1940,6 +2000,13 @@ function main() {
   loadConfig();
   initFFmpeg();
 
+  // 演示模式下即使存在 config.json 也不使用：绝不让凭证留在公网服务里
+  if (DEMO) {
+    config.cookie = '';
+    config.user = null;
+    console.log('  演示模式：已忽略本地凭证，仅提供解析');
+  }
+
   // 每次启动都把配置文件权限再收紧一次：
   // 用户可能从别处拷回一个权限宽松的 config.json
   if (fs.existsSync(CONFIG_PATH)) tightenConfigPermissions();
@@ -1985,7 +2052,7 @@ function main() {
     return serveStatic(req, res, url.pathname);
   });
 
-  const startPort = Number(process.env.PORT || 7788);
+  const startPort = Number(process.env.PORT || (DEMO ? 7860 : 7788));
   let attempts = 0;
 
   const tryListen = (port) => {
@@ -1999,7 +2066,8 @@ function main() {
       }
     });
 
-    server.listen(port, '127.0.0.1', async () => {
+    // 演示模式要监听 0.0.0.0，平台容器才能把流量转发进来
+    server.listen(port, DEMO ? '0.0.0.0' : '127.0.0.1', async () => {
       await ensureDownloadDir();
       await initGuestCookie();
 

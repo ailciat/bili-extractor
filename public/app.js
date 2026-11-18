@@ -16,6 +16,8 @@ const state = {
   batchQualities: [],
   busy: false,
 
+  demo: false,        // 在线演示模式：只解析，不下载、不登录
+
   loginKey: null,
   loginTimer: null,
   loginState: 'idle', // idle | loading | waiting | scanned | ok | expired
@@ -787,6 +789,12 @@ function updateDownloadLabel() {
   const label = $('btnDownloadLabel');
   const meta = MODE_META[state.mode];
 
+  if (state.demo) {
+    label.textContent = '在线演示 · 不提供下载';
+    btn.disabled = true;
+    return;
+  }
+
   const info = state.items[0] && state.items[0].info;
   const pages = (info && info.pages) || [];
   const multi = pages.length > 1 && state.mode !== 'cover';
@@ -1086,6 +1094,11 @@ async function downloadItem(item, opts = {}) {
 }
 
 async function downloadCurrent() {
+  if (state.demo) {
+    notice('在线演示版只提供解析，下载请在本机运行', 'info', 5000);
+    return;
+  }
+
   const item = state.items[0];
   if (!item || !item.info) return;
 
@@ -1194,6 +1207,11 @@ async function downloadCurrent() {
 }
 
 async function batchDownload() {
+  if (state.demo) {
+    notice('在线演示版只提供解析，下载请在本机运行', 'info', 5000);
+    return;
+  }
+
   const picks = state.items.filter((i) => i.ok && i.selected);
   if (!picks.length) {
     notice('先勾选要下载的条目', 'error', 2600);
@@ -1416,6 +1434,15 @@ async function refreshHdNote() {
   }
 }
 
+/** 在线演示：只解析，下载与登录都由服务端拒绝 */
+function enableDemo() {
+  state.demo = true;
+  document.body.classList.add('is-demo');
+  const bar = $('demoBar');
+  if (bar) bar.hidden = false;
+  updateDownloadLabel();
+}
+
 function applyAccount(user) {
   state.account = user || null;
 
@@ -1453,6 +1480,11 @@ async function refreshAccount() {
 }
 
 function openLogin() {
+  if (state.demo) {
+    notice('在线演示版不提供登录，扫码登录请在本机运行', 'info', 4200);
+    return;
+  }
+
   $('loginMask').classList.add('show');
 
   if (state.account) {
@@ -1860,7 +1892,9 @@ async function boot() {
     state.downloadDir = cfg.downloadDir || '';
     $('btnOpenFolder').title = state.downloadDir || '打开下载文件夹';
     renderHdNote(cfg);
-    if (!cfg.hasCookie) {
+
+    if (cfg.demo) enableDemo();
+    else if (!cfg.hasCookie) {
       notice('当前是访客模式，最高 720P。点右上角「游客」扫码登录可解锁高画质。', 'info', 8000);
     }
   } catch {

@@ -36,7 +36,24 @@ npm install
 npm start
 ```
 
-### 关于依赖
+#### 在线演示（魔搭创空间）
+
+<https://modelscope.cn/studios/awazas/bili-extractor>
+
+演示版用 `Dockerfile` 部署，只提供**解析**：粘贴链接能看到标题、UP 主、分集与清晰度，
+下载与登录都由服务端拒绝（`STUDIO_DEMO=1`）。
+
+原因很直接：这个工具要把文件写到你的硬盘、还要保存登录态，这两件事都不该发生在别人的服务器上。
+所以在线版只做“看”，真要下载请在本机运行。
+
+想自己跑同款容器：
+
+```bash
+docker build -t bili-extractor .
+docker run -p 7860:7860 bili-extractor
+```
+
+## 关于依赖
 
 两个依赖，各管一件事，缺了也能跑、只是功能降级：
 
