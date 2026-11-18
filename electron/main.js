@@ -62,6 +62,7 @@ async function createWindow() {
     minHeight: 560,
     backgroundColor: '#0a0c11',
     title: '哔哩提取器',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,

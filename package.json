@@ -32,7 +32,7 @@
     "appId": "com.ailciat.bili-extractor",
     "productName": "哔哩提取器",
     "asar": false,
-    "artifactName": "bili-extractor-${version}-win-x64.${ext}",
+    "artifactName": "哔哩提取器-${version}-win-x64.${ext}",
     "directories": {
       "output": "dist"
     },
@@ -41,10 +41,12 @@
       "electron/**/*",
       "public/**/*",
       "scripts/**/*",
+      "build/icon.ico",
       "package.json",
       "node_modules/**/*"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "signAndEditExecutable": false,
       "target": [
         {

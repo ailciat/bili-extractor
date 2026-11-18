@@ -17,7 +17,7 @@
 
 ### 方式一：桌面应用 exe（推荐）
 
-拿到 `bili-extractor-<版本>-win-x64.exe` 后（获取方式见下方「构建 Windows exe」），**双击即用**：不用安装、不用解压、不用装 Node。
+拿到 `哔哩提取器-<版本>-win-x64.exe` 后（获取方式见下方「构建 Windows exe」），**双击即用**：不用安装、不用解压、不用装 Node。
 配置和下载默认放在 `C:\Users\<你的用户名>\.bili-extractor\`，可在设置里改。
 exe 未做代码签名，Windows 首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。
 
@@ -349,7 +349,7 @@ npm install
 npm run app:pack
 ```
 
-产物是 `dist/bili-extractor-<版本>-win-x64.exe`（约 86MB），双击即可，不依赖 Node。
+产物是 `dist/哔哩提取器-<版本>-win-x64.exe`（约 86MB），中文文件名与中文应用名，自带图标，双击即可，不依赖 Node。
 打包跳过了代码签名，因此本地构建不需要管理员权限；代价是首次运行会触发 SmartScreen 提示。
 `npm run pack` 仍可打旧的便携 zip（约 23MB，解压后双击 `启动.bat`）。
 桌面壳启动时会在 `%USERPROFILE%\.bili-extractor\` 下保存配置和下载文件，不会写进 exe 自身。
