@@ -7,6 +7,8 @@
 
 本地运行，文件只落在你自己的硬盘上。
 
+项目地址：<https://github.com/ailciat/bili-extractor>
+
 ---
 
 ## 快速开始
@@ -23,7 +25,7 @@ macOS / Linux 用同一个仓库，解压后执行 `./start.sh`。
 ### 方式二：clone 后双击
 
 ```bash
-git clone git@github.com:ailciat/bili-extractor.git
+git clone https://github.com/ailciat/bili-extractor.git
 ```
 
 双击 `启动.bat`（Windows）或 `./start.sh`。**首次运行会自动安装依赖**（约 64MB，只装一次），
@@ -41,11 +43,8 @@ npm start
 <https://modelscope.cn/studios/awazas/bili-extractor>
 
 演示版用 `Dockerfile` 部署（`STUDIO_DEMO=1`）：粘贴链接可看标题、UP 主、分集与清晰度，
-也能直接**下载视频（最高 720P）、音频和封面**到自己的设备。
-
-下载走服务端取流、浏览器直收，不把文件写到服务器磁盘；登录、高画质（1080P/4K）与保存目录设置
-只在本地版开放——这些都不适合交给公网服务器。在线版还有频率、并发和单文件大小限制，
-批量任务或长视频建议用本机版。
+也可以复制原链接到 B 站观看。在线版不提供文件下载、登录、高画质（1080P/4K）与保存目录设置；
+这些能力只在本地版开放。
 
 想自己跑同款容器：
 
