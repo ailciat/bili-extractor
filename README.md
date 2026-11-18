@@ -280,11 +280,11 @@ B 站 DASH 音频轨是标准 fMP4（`ftyp` + `moov` 在文件头部），本身
 ## 想用独立窗口（可选）
 
 ```bash
-npm install electron --save-dev
 npm run app
 ```
 
-会开一个独立桌面窗口。不装也完全不影响使用。
+依赖里已经带了 Electron，`npm install` 后直接运行即可开一个独立桌面窗口；
+`npm run app:pack` 则把它打成免安装的 exe。不装桌面壳也完全不影响网页版使用。
 
 ---
 
@@ -305,6 +305,7 @@ bili-extractor/
 │       └── app.css       # 组件样式
 ├── start.sh              # macOS / Linux 启动脚本
 ├── electron/main.js      # 可选的桌面窗口壳
+├── build/icon.ico        # 应用图标（exe 与窗口共用，6 尺寸）
 ├── scripts/
 │   ├── ci-check.js       # 静态自检（CI 与 npm run check 共用）
 │   ├── ensure-deps.js    # 依赖自检 / 首次自动安装
@@ -340,7 +341,8 @@ GitHub Actions 在每次推送和 PR 时跑同一套检查（见 `.github/workfl
 
 打包工作流是**手动触发**的，不会拖慢日常 CI：打开
 [Build exe](https://github.com/ailciat/bili-extractor/actions/workflows/build-exe.yml)，
-点 **Run workflow**，跑完在本次运行的 artifact 里下载 `bili-extractor-win-x64`。
+点 **Run workflow**，跑完在本次运行的 artifact（名 `bili-extractor-win-x64`）里下载
+`哔哩提取器-<版本>-win-x64.exe`。工作流会自动带上仓库里的 `build/icon.ico`，中文应用名与图标都齐全。
 
 本地打包（需要 Windows）：
 
