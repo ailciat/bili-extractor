@@ -76,14 +76,24 @@ jobs:
             const exe = fs.readdirSync('dist').find(f => f.toLowerCase().endsWith('.exe'));
             if (!exe) throw new Error('dist 下没有 exe');
             const buf = fs.readFileSync('dist/' + exe);
-            const url = rel.upload_url.split('{')[0] + '?name=' + encodeURIComponent(assetName);
+            // 上传用纯 ASCII 名：GitHub 的 upload 端点会剥掉 ?name= 里的非 ASCII 前缀
+            const asciiName = 'app-' + ver + '-win-x64.exe';
+            const url = rel.upload_url.split('{')[0] + '?name=' + asciiName;
             const up = await fetch(url, {
               method: 'POST',
               headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) },
               body: buf
             });
             if (!up.ok) throw new Error('上传失败 ' + up.status + ' ' + await up.text());
-            console.log('已发布到 Releases: ' + assetName);
+            const asset = await up.json();
+            // 再用 PATCH 把资源名改成中文（JSON body 传中文不受 upload 端点限制）
+            const patch = await fetch(api + '/releases/assets/' + asset.id, {
+              method: 'PATCH',
+              headers: { ...H, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: assetName })
+            });
+            if (!patch.ok) throw new Error('重命名资源失败 ' + patch.status + ' ' + await patch.text());
+            console.log('已发布到 Releases: ' + (await patch.json()).name);
           }
           main().catch(e => { console.error(e); process.exit(1); });
           NODE
