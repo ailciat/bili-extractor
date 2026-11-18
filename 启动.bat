@@ -21,6 +21,13 @@ if errorlevel 1 ^(
     exit /b 1
 ^)
 
+rem 首次运行会自动补齐依赖（二维码 / ffmpeg），之后每次只是秒级检查
+node scripts\ensure-deps.js
+if errorlevel 1 ^(
+    echo   [提示] 依赖检查出错，程序仍会尝试启动。
+^)
+
+echo.
 echo   正在启动，浏览器会自动打开界面...
 echo   关闭本窗口即可退出程序。
 echo.

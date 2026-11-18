@@ -40,6 +40,9 @@ const JS_FILES = [
   'public/app.js',
   'public/theme-init.js',
   'public/sea-bubbles.js',
+  'scripts/ci-check.js',
+  'scripts/ensure-deps.js',
+  'scripts/pack.js',
 ];
 
 console.log('\n[1/4] JS 语法');

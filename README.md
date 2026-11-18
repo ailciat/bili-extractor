@@ -11,9 +11,43 @@
 
 ## 快速开始
 
-双击 **`启动.bat`**，浏览器会自动打开界面。关掉那个黑窗口就是退出。
+> 三种方式都需要 Node.js 18 以上（[下载](https://nodejs.org/zh-cn)），它负责跑本地服务。
 
-> 需要 Node.js 18 以上（[下载](https://nodejs.org/zh-cn)）。首次使用前在项目目录执行一次 `npm install`，会装上二维码组件和 ffmpeg（合计约 64MB 的依赖），后者用于 1080P 高清合并。
+### 方式一：便携包（推荐给不熟 npm 的人）
+
+下载 Releases 里的 `bili-extractor-v?.?.?-win32-x64.zip`（或自己用 `npm run pack` 打一个），
+**解压后双击 `启动.bat`** 即可。依赖已经打包在里面，不需要 `npm install`，也不用联网装包。
+
+macOS / Linux 用同一个仓库，解压后执行 `./start.sh`。
+
+### 方式二：clone 后双击
+
+```bash
+git clone git@github.com:ailciat/bili-extractor.git
+```
+
+双击 `启动.bat`（Windows）或 `./start.sh`。**首次运行会自动安装依赖**（约 64MB，只装一次），
+之后每次启动只是秒级检查，不会重复下载。官方源超时会自动换国内镜像重试。
+
+### 方式三：手动
+
+```bash
+npm install
+npm start
+```
+
+### 关于依赖
+
+两个依赖，各管一件事，缺了也能跑、只是功能降级：
+
+| 依赖 | 用途 | 缺失后果 |
+| --- | --- | --- |
+| `qrcode`（约 2MB） | 扫码登录 | 只能手动填 SESSDATA |
+| `@ffmpeg-installer/ffmpeg`（约 62MB） | 1080P 以上音视频合并 | 最高 720P |
+
+**为什么不把 `node_modules` 直接提交进仓库？** 64MB 里有 62MB 是**当前平台专用**的 ffmpeg 二进制，
+Windows 打出来的包放到 macOS 上完全没用；而且 git 历史里的体积删不掉，clone 会越来越慢。
+同样「解压即用」的效果，用便携包或首次自动安装更划算。
 
 ---
 
@@ -244,12 +278,17 @@ bili-extractor/
 │       ├── tokens.css    # 设计令牌：颜色 / 字阶 / 间距 / 动效
 │       ├── base.css      # 重置 / 排版 / 焦点 / 氛围 / 动效降级
 │       └── app.css       # 组件样式
+├── start.sh              # macOS / Linux 启动脚本
 ├── electron/main.js      # 可选的桌面窗口壳
-├── scripts/ci-check.js   # 静态自检（CI 与 npm run check 共用）
+├── scripts/
+│   ├── ci-check.js       # 静态自检（CI 与 npm run check 共用）
+│   ├── ensure-deps.js    # 依赖自检 / 首次自动安装
+│   └── pack.js           # 打便携包（含 node_modules）
 ├── .github/workflows/    # GitHub Actions：每次推送跑自检
 ├── public/assets/bg.jpg  # 背景插画
 ├── node_modules/         # 依赖（qrcode 二维码、ffmpeg 二进制）
 ├── downloads/            # 下载的文件
+├── dist/                 # 便携包产物（npm run pack 生成，不入库）
 └── config.json           # 登录凭证与设置（首次保存时生成，勿外传，已加入 .gitignore）
 ```
 

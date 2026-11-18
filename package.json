@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "app": "electron .",
-    "check": "node scripts/ci-check.js"
+    "check": "node scripts/ci-check.js",
+    "pack": "node scripts/pack.js",
+    "deps:check": "node scripts/ensure-deps.js --check"
   },
   "keywords": [
     "bilibili",

@@ -19,3 +19,6 @@ Thumbs.db
 # 编辑器
 .vscode/
 .idea/
+
+# 打包产物（npm run pack 生成）
+dist/
