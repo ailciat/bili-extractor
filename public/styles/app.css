@@ -2150,6 +2150,17 @@ img.is-broken {
   box-shadow: 0 0 0 3px rgba(43, 201, 138, 0.16);
 }
 
+.footer-github {
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer-github:hover,
+.footer-github:focus-visible {
+  color: var(--brand);
+}
+
 /* ============================================================
    清晰度说明条
    ============================================================ */
