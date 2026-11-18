@@ -17,7 +17,7 @@
 
 ### 方式一：桌面应用 exe（推荐）
 
-下载 Releases 里的 `bili-extractor-<版本>-win-x64.exe`，**双击即用**：不用安装、不用解压、不用装 Node。
+拿到 `bili-extractor-<版本>-win-x64.exe` 后（获取方式见下方「构建 Windows exe」），**双击即用**：不用安装、不用解压、不用装 Node。
 配置和下载默认放在 `C:\Users\<你的用户名>\.bili-extractor\`，可在设置里改。
 exe 未做代码签名，Windows 首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。
 
