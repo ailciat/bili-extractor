@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: 静态自检
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 不需要 npm install：自检只读源码，
+      # 二维码库与 ffmpeg 都是按需加载的，CI 里不会真的下视频
+      - name: 语法 / DOM id / CSS 变量 / CSP
+        run: node scripts/ci-check.js

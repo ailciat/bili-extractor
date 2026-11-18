@@ -1,5 +1,8 @@
 # 提炼 · B 站视频 / 音频 / 封面提取
 
+[![CI](https://github.com/ailciat/bili-extractor/actions/workflows/ci.yml/badge.svg)](https://github.com/ailciat/bili-extractor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-1976d2.svg)](LICENSE)
+
 粘贴链接，选好画质，把想要的东西存到本地。支持一次处理多条。
 
 本地运行，文件只落在你自己的硬盘上。
@@ -242,8 +245,37 @@ bili-extractor/
 │       ├── base.css      # 重置 / 排版 / 焦点 / 氛围 / 动效降级
 │       └── app.css       # 组件样式
 ├── electron/main.js      # 可选的桌面窗口壳
+├── scripts/ci-check.js   # 静态自检（CI 与 npm run check 共用）
+├── .github/workflows/    # GitHub Actions：每次推送跑自检
 ├── public/assets/bg.jpg  # 背景插画
 ├── node_modules/         # 依赖（qrcode 二维码、ffmpeg 二进制）
 ├── downloads/            # 下载的文件
-└── config.json           # 登录凭证与设置（首次保存时生成，勿外传）
+└── config.json           # 登录凭证与设置（首次保存时生成，勿外传，已加入 .gitignore）
 ```
+
+---
+
+## 开发与自检
+
+```bash
+npm run check
+```
+
+几秒钟跑完，不联网、不装依赖。查的都是「改坏了但看不太出来」的问题：
+
+| 检查 | 为什么值得查 |
+| --- | --- |
+| JS 语法 | `node --check` 全部脚本 |
+| **DOM id 引用** | `app.js` 里 `$('xxx')` 引用的 id 在页面里不存在时，`bind()` 会在中途抛错，后面的按钮全部失灵，表现像「页面没反应」 |
+| CSS 变量 | `var(--x)` 引用了 `tokens.css` 没定义的变量，样式会静默失效 |
+| 内联脚本 | 严格 CSP 不允许内联 `<script>`，加进去不会执行也不报错 |
+
+GitHub Actions 在每次推送和 PR 时跑同一套检查（见 `.github/workflows/ci.yml`）。
+
+---
+
+## 许可证
+
+[MIT](LICENSE) © 2026 ailciat
+
+仅供个人学习与技术研究使用，请遵守[B 站用户协议](https://www.bilibili.com/blackboard/protocol.html)与《著作权法》，下载内容请勿二次传播或用于商业用途。

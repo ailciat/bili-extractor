@@ -6,7 +6,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
-    "app": "electron ."
+    "app": "electron .",
+    "check": "node scripts/ci-check.js"
   },
   "keywords": [
     "bilibili",
