@@ -118,13 +118,15 @@ function rejectReason(req) {
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'X-Robots-Tag': 'noindex, nofollow',
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=(), payment=()',
 };
+
+// 本机版禁止被任何页面嵌套；演示版需要允许魔搭的 iframe 嵌入
+if (!DEMO) SECURITY_HEADERS['X-Frame-Options'] = 'DENY';
 
 /** 页面能加载什么，由这里一次说清 */
 const CSP = [
@@ -135,7 +137,8 @@ const CSP = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "media-src 'self'",
-  "frame-ancestors 'none'",
+  // 演示模式挂在魔搭的 iframe 里，其余场景一律不许被嵌套
+  DEMO ? "frame-ancestors 'self' https://modelscope.cn https://*.modelscope.cn https://*.ms.show" : "frame-ancestors 'none'",
   "form-action 'none'",
   "base-uri 'none'",
   "object-src 'none'",
