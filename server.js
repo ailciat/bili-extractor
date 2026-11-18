@@ -66,13 +66,14 @@ function isLocalOrigin(origin) {
  * 一台任何人都能用的下载代理：
  *   1. 绑定 0.0.0.0 并放开 Host 校验（域名由平台分配，无法预知）
  *   2. 关闭登录与设置写入 —— 绝不让别人的凭证落到服务器上
- *   3. 关闭下载 / 文件浏览等能触碰磁盘的接口
- * 只保留解析类接口：视频信息、分集、清晰度、封面预览。
+ *   3. 关闭写盘、登录与设置接口 —— 绝不让别人的凭证或文件落到服务器上
+ * 在线版只保留「解析 + 受控下载」：下载改为服务端取流、浏览器直收，
+ * 不写服务器磁盘；视频限访客可见的 720P 及以下，音频 / 封面同样放行。
  * ============================================================ */
 
 const DEMO = process.env.STUDIO_DEMO === '1';
 
-/** 演示模式下不允许调用的接口前缀 */
+/** 会写服务器磁盘的接口，演示模式一律拒绝；在线下载走独立的 /api/demo/download */
 const DEMO_BLOCKED = [
   '/api/download',
   '/api/login',
@@ -84,6 +85,36 @@ const DEMO_BLOCKED = [
 
 function demoBlocked(pathname) {
   return DEMO_BLOCKED.some((p) => pathname === p || pathname.startsWith(p));
+}
+
+/* ---- 在线下载：流式代理，不落盘、不收凭证 ---- */
+const DEMO_DOWNLOAD_PATH = '/api/demo/download';
+const DEMO_MAX_BYTES = 500 * 1024 * 1024; // 单个文件上限
+const DEMO_MAX_ACTIVE = 2; // 全局同时取流数，保护创空间带宽
+const DEMO_LIMIT_WINDOW = 60 * 1000;
+const DEMO_LIMIT_COUNT = 20; // 每 IP 每分钟最多 20 次
+const demoDownloadBuckets = new Map();
+let demoDownloadActive = 0;
+
+function clientIp(req) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return fwd || req.socket.remoteAddress || 'local';
+}
+
+function demoDownloadLimited(ip) {
+  const now = Date.now();
+  const bucket = demoDownloadBuckets.get(ip);
+  if (!bucket || now - bucket.start > DEMO_LIMIT_WINDOW) {
+    demoDownloadBuckets.set(ip, { start: now, count: 1 });
+    if (demoDownloadBuckets.size > 128) {
+      for (const [key, v] of demoDownloadBuckets) {
+        if (now - v.start > DEMO_LIMIT_WINDOW) demoDownloadBuckets.delete(key);
+      }
+    }
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > DEMO_LIMIT_COUNT;
 }
 
 /** 返回 null 表示放行，否则返回拒绝原因 */
@@ -677,6 +708,29 @@ function isBiliImageHost(hostname) {
   return /(^|\.)(hdslb\.com|biliimg\.com|bilibili\.com)$/i.test(String(hostname || ''));
 }
 
+/** 视频/音频流域名：B 站 CDN 会跳到这些域名，逐跳都要校验 */
+function isBiliStreamHost(hostname) {
+  return /(^|\.)(bilivideo\.com|bilivideo\.cn|biliapi\.net|biliapi\.com|bilibili\.com|bilibili\.cn|hdslb\.com|biliimg\.com|edge\.mountaintoys\.cn)$/i.test(
+    String(hostname || '')
+  );
+}
+
+function demoStreamGuard(u) {
+  return (
+    (u.protocol === 'https:' || u.protocol === 'http:') && isBiliStreamHost(u.hostname)
+  );
+}
+
+function checkDemoStreamUrl(raw) {
+  try {
+    const u = new URL(String(raw));
+    if (!demoStreamGuard(u)) return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** 封面图取原图：去掉 B 站 CDN 的 @ 缩放参数 */
 function hdCover(url) {
   if (!url) return '';
@@ -1128,12 +1182,17 @@ function pickVideoStream(streams, qn) {
 }
 
 /** 探测远端文件大小（用于把两段流的进度合并成一条） */
-async function headSize(urlStr) {
+async function headSize(urlStr, guard = null) {
   try {
-    const res = await requestGet(urlStr, {
-      Referer: 'https://www.bilibili.com/',
-      Range: 'bytes=0-0',
-    });
+    const res = await requestGet(
+      urlStr,
+      {
+        Referer: 'https://www.bilibili.com/',
+        Range: 'bytes=0-0',
+      },
+      0,
+      guard
+    );
     const cr = res.headers['content-range'] || '';
     const m = String(cr).match(/\/(\d+)\s*$/);
     res.resume();
@@ -1511,6 +1570,215 @@ async function startCoverDownload({ url, title }) {
 }
 
 /* ============================================================
+ * 在线演示下载：服务端取流，浏览器直接收，不写服务器磁盘
+ * ------------------------------------------------------------
+ * 与本机 /api/download 完全分开：这里不接受凭证、不碰目录，
+ * 只接受解析过的 bvid/cid/清晰度，再校验 CDN 域名后转发字节流。
+ * ============================================================ */
+
+const DEMO_STREAM_HEADERS = {
+  Referer: 'https://www.bilibili.com/',
+  Origin: 'https://www.bilibili.com',
+  Accept: '*/*',
+  'Accept-Encoding': 'identity',
+};
+
+function demoError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+function contentDisposition(filename) {
+  const name = String(filename || 'download');
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+/** 把一段或多段 DURL 顺序写入响应；不缓冲整文件，不落盘 */
+function streamDemoUrls(res, urls) {
+  return new Promise((resolve, reject) => {
+    let bytes = 0;
+    let current = null;
+    let done = false;
+    let i = 0;
+
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      if (current && typeof current.destroy === 'function') current.destroy();
+      if (err) {
+        if (!res.destroyed) res.destroy(err);
+        reject(err);
+      } else {
+        if (!res.writableEnded) res.end();
+        resolve();
+      }
+    };
+
+    res.on('close', () => finish(new Error('客户端已断开')));
+
+    const next = () => {
+      if (done) return;
+      if (i >= urls.length) return finish();
+
+      const url = urls[i++];
+      requestGet(url, DEMO_STREAM_HEADERS, 0, demoStreamGuard)
+        .then((r) => {
+          if (done) {
+            r.resume();
+            return;
+          }
+          if (r.statusCode >= 400) {
+            r.resume();
+            return finish(demoError(502, `源文件返回 HTTP ${r.statusCode}`));
+          }
+          current = r;
+          r.on('data', (chunk) => {
+            bytes += chunk.length;
+            if (bytes > DEMO_MAX_BYTES) finish(demoError(413, '文件超过在线版大小上限'));
+          });
+          r.on('error', finish);
+          r.on('end', () => {
+            current = null;
+            next();
+          });
+          r.pipe(res, { end: false });
+        })
+        .catch(finish);
+    };
+
+    next();
+  });
+}
+
+/** 根据查询参数准备下载地址与响应头；出错时还没写响应，可以安全返回 JSON */
+async function prepareDemoDownload(q) {
+  const type = ['video', 'audio', 'cover'].includes(q.get('type')) ? q.get('type') : 'video';
+  const title = safeName(q.get('title') || (type === 'cover' ? 'cover' : 'bilibili 视频'));
+  const part = safeName(q.get('part') || '');
+  const index = Math.min(999, Math.max(1, Number(q.get('index')) || 1));
+  const pageCount = Math.min(999, Math.max(1, Number(q.get('pageCount')) || 1));
+  const suffix = pageCount > 1 ? ` - P${index}${part ? ' ' + part : ''}` : '';
+
+  let rawUrls = [];
+  let filename = '';
+  let contentType = 'application/octet-stream';
+
+  if (type === 'cover') {
+    const raw = q.get('url') || '';
+    const clean = hdCover(raw);
+    if (!clean) throw demoError(400, '缺少封面地址');
+    let u;
+    try {
+      u = new URL(clean);
+    } catch {
+      throw demoError(400, '封面地址不合法');
+    }
+    if (!demoStreamGuard(u)) throw demoError(403, '不允许的封面域名');
+
+    rawUrls = [u.toString()];
+    const ext = (u.pathname.match(/\.(jpg|jpeg|png|webp|gif)$/i) || [, 'jpg'])[1].toLowerCase();
+    filename = `${title}${suffix} - 封面.${ext === 'jpeg' ? 'jpg' : ext}`;
+    contentType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+  } else {
+    const cid = String(q.get('cid') || '').trim();
+    const bvid = String(q.get('bvid') || '').trim();
+    const aid = String(q.get('aid') || '').trim();
+    const epId = String(q.get('epId') || '').trim();
+    if (!cid) throw demoError(400, '缺少分 P 信息，请先解析视频');
+    if (!bvid && !aid && !epId) throw demoError(400, '缺少视频标识，请重新解析');
+
+    const baseParams = { cid };
+    if (epId) baseParams.ep_id = epId;
+    else if (bvid) baseParams.bvid = bvid;
+    else baseParams.avid = aid;
+    const endpoint = epId ? '/pgc/player/web/playurl' : '/x/player/playurl';
+
+    if (type === 'video') {
+      let qn = Number(q.get('qn')) || 64;
+      if (qn > 74) throw demoError(403, '在线版最高支持 720P，高画质请在本机运行');
+
+      const d = await biliApi(endpoint, { ...baseParams, qn, fnval: 1, fourk: 1 });
+      rawUrls = (d.durl || []).map((x) => x.url).filter(Boolean);
+      if (!rawUrls.length) throw demoError(404, '未获取到可下载地址，可能是付费或充电专属内容');
+
+      const label = QN_LABEL[d.quality || qn] || `${d.quality || qn}`;
+      filename = `${title}${suffix} [${safeName(label)}].mp4`;
+      contentType = 'video/mp4';
+    } else {
+      const audioId = Number(q.get('audioId')) || 30280;
+      const d = await biliApi(endpoint, { ...baseParams, fnval: 4048, fourk: 1 });
+      const dash = d.dash || {};
+      const tracks = [...(dash.audio || [])];
+      if (dash.dolby && dash.dolby.audio) tracks.push(dash.dolby.audio);
+      if (dash.flac && dash.flac.audio) tracks.push(dash.flac.audio);
+      if (!tracks.length) throw demoError(404, '未找到可用音频轨');
+
+      const a =
+        tracks.find((x) => Number(x.id) === audioId) ||
+        tracks.sort((x, y) => (y.bandwidth || 0) - (x.bandwidth || 0))[0];
+      const url = a.baseUrl || a.base_url;
+      if (!url) throw demoError(404, '音频地址为空，请稍后重试');
+
+      rawUrls = [url];
+      filename = `${title}${suffix} [${safeName(AUDIO_LABEL[a.id] || '音频')}].m4a`;
+      contentType = 'audio/mp4';
+    }
+  }
+
+  const urls = rawUrls.map(checkDemoStreamUrl);
+  if (!urls.length || urls.some((u) => !u)) throw demoError(403, '下载地址不在允许范围内');
+
+  let total = 0;
+  for (const u of urls) {
+    total += (await headSize(u, demoStreamGuard)) || 0;
+  }
+  if (total > DEMO_MAX_BYTES) {
+    throw demoError(413, '文件超过在线版大小上限，请在本机下载');
+  }
+
+  return { urls, filename, contentType, total };
+}
+
+async function handleDemoDownload(req, res, q) {
+  if (!DEMO) return sendJSON(res, 404, { ok: false, error: '未找到接口' });
+
+  const ip = clientIp(req);
+  if (demoDownloadLimited(ip)) {
+    return sendJSON(res, 429, { ok: false, error: '在线下载过于频繁，请稍后再试' });
+  }
+  if (demoDownloadActive >= DEMO_MAX_ACTIVE) {
+    return sendJSON(res, 429, { ok: false, error: '在线下载繁忙，请稍后再试' });
+  }
+
+  demoDownloadActive++;
+  let started = false;
+  try {
+    const prepared = await prepareDemoDownload(q);
+    const headers = {
+      'Content-Type': prepared.contentType,
+      'Content-Disposition': contentDisposition(prepared.filename),
+      'Cache-Control': 'no-store',
+      'Accept-Ranges': 'none',
+    };
+    if (prepared.total) headers['Content-Length'] = prepared.total;
+
+    res.writeHead(200, headers);
+    started = true;
+    await streamDemoUrls(res, prepared.urls);
+  } catch (e) {
+    if (!started) {
+      sendJSON(res, e.status || 502, { ok: false, error: e.message || '在线下载失败' });
+    } else if (!res.destroyed) {
+      res.destroy(e);
+    }
+  } finally {
+    demoDownloadActive--;
+  }
+}
+
+/* ============================================================
  * HTTP 服务
  * ============================================================ */
 
@@ -1592,7 +1860,7 @@ async function handleApi(req, res, url) {
   if (DEMO && demoBlocked(p)) {
     return sendJSON(res, 403, {
       ok: false,
-      error: '在线演示版只提供解析，下载请在本机运行',
+      error: '在线版不支持此下载方式，请使用页面上的下载按钮',
     });
   }
 
@@ -1602,6 +1870,11 @@ async function handleApi(req, res, url) {
       ok: false,
       error: '在线演示版不支持修改设置',
     });
+  }
+
+  // 在线下载：浏览器直收，不写服务器磁盘；只放行演示模式
+  if (p === DEMO_DOWNLOAD_PATH && req.method === 'GET') {
+    return handleDemoDownload(req, res, q);
   }
 
   try {
@@ -2007,7 +2280,7 @@ function main() {
   if (DEMO) {
     config.cookie = '';
     config.user = null;
-    console.log('  演示模式：已忽略本地凭证，仅提供解析');
+    console.log('  演示模式：已忽略本地凭证，仅提供解析与在线下载');
   }
 
   // 每次启动都把配置文件权限再收紧一次：

@@ -16,7 +16,7 @@ const state = {
   batchQualities: [],
   busy: false,
 
-  demo: false,        // 在线演示模式：只解析，不下载、不登录
+  demo: false,        // 在线演示模式：开放受控下载，不登录、不写设置
 
   loginKey: null,
   loginTimer: null,
@@ -789,12 +789,6 @@ function updateDownloadLabel() {
   const label = $('btnDownloadLabel');
   const meta = MODE_META[state.mode];
 
-  if (state.demo) {
-    label.textContent = '在线演示 · 不提供下载';
-    btn.disabled = true;
-    return;
-  }
-
   const info = state.items[0] && state.items[0].info;
   const pages = (info && info.pages) || [];
   const multi = pages.length > 1 && state.mode !== 'cover';
@@ -857,8 +851,10 @@ async function loadQualities() {
 
   try {
     if (state.mode === 'video') {
-      const list = await api('/api/qualities?' + pageQuery(page));
-      state.qualities = list || [];
+      const raw = await api('/api/qualities?' + pageQuery(page));
+      // 在线版只走访客 DURL，最高 720P；高清留给本机版
+      state.qualities = (raw || []).filter((q) => Number(q.qn) <= 74);
+      $('qualityLabel').textContent = state.demo ? '清晰度 · 在线≤720P' : '清晰度';
       if (!state.qualities.length) {
         sel.innerHTML = '<option value="">无可用清晰度</option>';
         return;
@@ -1003,8 +999,9 @@ async function loadBatchQualities() {
   try {
     const page = first.info.pages[0];
     if (state.mode === 'video') {
-      const list = await api('/api/qualities?' + pageQuery(page));
-      state.batchQualities = list || [];
+      const raw = await api('/api/qualities?' + pageQuery(page));
+      state.batchQualities = (raw || []).filter((q) => Number(q.qn) <= 74);
+      $('batchQualityLabel').textContent = state.demo ? '清晰度 · ≤720P' : '清晰度';
       sel.innerHTML = state.batchQualities.length
         ? state.batchQualities.map((q) => `<option value="${q.qn}">${esc(q.label)}</option>`).join('')
         : '<option value="">无可用</option>';
@@ -1029,6 +1026,42 @@ async function loadBatchQualities() {
    下载
    ============================================================ */
 
+/** 在线版：拼出受控下载链接，只带解析结果里的标识，不接受任意地址 */
+function demoDownloadUrl({ type = 'video', page = null, info = null, quality = 0 }) {
+  const qs = new URLSearchParams({
+    type,
+    title: (info && info.title) || 'bilibili',
+    part: (page && page.part) || '',
+    index: String((page && page.index) || 1),
+    pageCount: String((info && info.pages && info.pages.length) || 1),
+  });
+
+  if (type === 'cover') {
+    qs.set('url', (info && info.cover) || '');
+  } else {
+    qs.set('cid', (page && page.cid) || '');
+    if (page && page.epId) qs.set('epId', page.epId);
+    else if ((page && page.bvid) || (info && info.bvid)) {
+      qs.set('bvid', (page && page.bvid) || info.bvid);
+    } else if ((page && page.aid) || (info && info.aid)) {
+      qs.set('aid', String((page && page.aid) || info.aid));
+    }
+    if (type === 'video') qs.set('qn', String(quality || 64));
+    else qs.set('audioId', String(quality || 30280));
+  }
+  return '/api/demo/download?' + qs.toString();
+}
+
+/** 用浏览器原生下载，服务端只转字节流；不做 fetch 缓冲 */
+function triggerDemoDownload(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 1000);
+}
+
 async function downloadItem(item, opts = {}) {
   const silent = Boolean(opts.silent);
   const info = item.info;
@@ -1036,6 +1069,17 @@ async function downloadItem(item, opts = {}) {
 
   const page0 = info.pages && info.pages[0];
   if (!page0) return false;
+
+  if (state.demo) {
+    const type = state.mode === 'audio' ? 'audio' : state.mode === 'cover' ? 'cover' : 'video';
+    const quality =
+      type === 'audio'
+        ? Number($('batchQuality').value) || 30280
+        : Number($('batchQuality').value) || 64;
+    triggerDemoDownload(demoDownloadUrl({ type, page: page0, info, quality }));
+    if (!silent) notice('已开始下载', 'ok', 2200);
+    return true;
+  }
 
   try {
     if (state.mode === 'cover') {
@@ -1105,6 +1149,45 @@ async function downloadCurrent() {
   const info = item.info;
   const pages = info.pages || [];
   if (!pages.length) return;
+
+  /* ---------- 在线版：浏览器直收，不进服务器写盘队列 ---------- */
+  if (state.demo) {
+    if (state.mode === 'cover') {
+      triggerDemoDownload(demoDownloadUrl({ type: 'cover', info }));
+      notice('已开始下载封面', 'ok', 2600);
+      return;
+    }
+
+    const demoPicks =
+      pages.length > 1
+        ? [...state.selectedPages].sort((a, b) => a - b).map((i) => pages[i])
+        : [pages[0]];
+    if (!demoPicks.length) {
+      notice('先勾选要下载的分集', 'error', 2600);
+      return;
+    }
+
+    const demoQv = Number($('qualitySelect').value);
+    if (!demoQv) {
+      notice(state.mode === 'video' ? '清晰度还在读取，稍等一下' : '音质还在读取，稍等一下', 'error', 2600);
+      return;
+    }
+
+    for (let i = 0; i < demoPicks.length; i++) {
+      triggerDemoDownload(
+        demoDownloadUrl({ type: state.mode, page: demoPicks[i], info, quality: demoQv })
+      );
+      if (i < demoPicks.length - 1) await new Promise((r) => setTimeout(r, 350));
+    }
+    notice(
+      demoPicks.length > 1
+        ? `已发起 ${demoPicks.length} 个下载，如浏览器拦截请允许本站多文件下载`
+        : '已开始下载',
+      'ok',
+      3200
+    );
+    return;
+  }
 
   const btn = $('btnDownload');
 
@@ -1207,11 +1290,6 @@ async function downloadCurrent() {
 }
 
 async function batchDownload() {
-  if (state.demo) {
-    notice('在线演示版只提供解析，下载请在本机运行', 'info', 5000);
-    return;
-  }
-
   const picks = state.items.filter((i) => i.ok && i.selected);
   if (!picks.length) {
     notice('先勾选要下载的条目', 'error', 2600);
@@ -1434,7 +1512,7 @@ async function refreshHdNote() {
   }
 }
 
-/** 在线演示：只解析，下载与登录都由服务端拒绝 */
+/** 在线演示：可下载视频(≤720P)/音频/封面；登录与设置仍关闭 */
 function enableDemo() {
   state.demo = true;
   document.body.classList.add('is-demo');
