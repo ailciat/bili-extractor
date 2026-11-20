@@ -1,9 +1,13 @@
 {
   "name": "bili-extractor",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "提炼 · B站视频 / 音频 / 封面提取工具",
   "main": "electron/main.js",
+  "author": "ailciat",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
     "app": "electron .",
@@ -26,8 +30,8 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "com.ailciat.bili-extractor",

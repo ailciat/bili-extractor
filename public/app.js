@@ -1375,7 +1375,10 @@ function renderTasks(tasks) {
           <div class="task-bar"><i></i></div>
           <div class="task-err" hidden></div>
         </div>
-        <span class="task-state"></span>`;
+        <div class="task-side">
+          <span class="task-state"></span>
+          <button class="task-act" type="button" hidden></button>
+        </div>`;
     }
 
     // 服务端按开始时间倒序返回，这里同步 DOM 顺序，新任务始终在最前
@@ -1437,6 +1440,49 @@ function updateTaskRow(row, t, index) {
     errEl.textContent = t.error;
   } else {
     errEl.hidden = true;
+  }
+
+  // 操作按钮：进行中 → 取消；失败 / 已取消 → 重试
+  const act = row.querySelector('.task-act');
+  if (act) {
+    if (t.canCancel) {
+      act.hidden = false;
+      act.dataset.act = 'cancel';
+      act.dataset.id = t.id;
+      act.textContent = '取消';
+      act.title = '取消这个任务';
+    } else if (t.status === 'error' || t.status === 'canceled') {
+      act.hidden = false;
+      act.dataset.act = 'retry';
+      act.dataset.id = t.id;
+      act.textContent = '重试';
+      act.title = '重新下载这个任务';
+    } else {
+      act.hidden = true;
+      act.dataset.act = '';
+      act.dataset.id = '';
+    }
+  }
+}
+
+/** 取消单个任务（排队 / 取地址 / 下载 / 合并都能停） */
+async function cancelOneTask(id) {
+  try {
+    await api('/api/cancel?id=' + encodeURIComponent(id));
+    pollTasks();
+  } catch (e) {
+    notice('取消失败：' + e.message, 'error', 4000);
+  }
+}
+
+/** 重试失败或已取消的任务（服务端复用原始参数） */
+async function retryOneTask(id) {
+  try {
+    await api('/api/retry?id=' + encodeURIComponent(id), { method: 'POST' });
+    notice('已重新加入队列', 'ok', 2200);
+    pollTasks();
+  } catch (e) {
+    notice('重试失败：' + e.message, 'error', 4000);
   }
 }
 
@@ -1722,6 +1768,13 @@ async function loadSecurity() {
   try {
     const d = await api('/api/security');
 
+    // 在线演示跑在公网容器里，本机隔离天然不适用，单独说明而不是报「异常」
+    if (!d.localOnly) {
+      line.dataset.ok = 'demo';
+      text.textContent = '在线演示 · 本机版保护更完整';
+      return;
+    }
+
     const ok =
       d.localOnly &&
       d.hostGuard &&
@@ -1881,6 +1934,16 @@ function bind() {
       </li>`;
     }
     $('queueMeta').textContent = '空闲';
+  });
+
+  // 任务卡上的取消 / 重试（事件委托，避免每行重复绑定）
+  $('taskList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.task-act');
+    if (!btn || btn.hidden) return;
+    const id = btn.dataset.id;
+    if (!id) return;
+    if (btn.dataset.act === 'cancel') cancelOneTask(id);
+    else if (btn.dataset.act === 'retry') retryOneTask(id);
   });
 
   // 账号 / 登录

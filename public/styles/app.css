@@ -1572,6 +1572,41 @@ img.is-broken {
   background: var(--brand-mist);
 }
 
+/* 任务行右上角：状态徽标 + 取消/重试按钮 */
+.task-side {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-act {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-3);
+  font-family: var(--font-round);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.task-act:hover {
+  border-color: var(--brand-soft);
+  color: var(--brand-deep);
+}
+
+.task-act[data-act="retry"]:hover {
+  border-color: var(--warn-text);
+  color: var(--warn-text);
+}
+
 .task-idx {
   grid-column: 1;
   grid-row: 1;

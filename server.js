@@ -995,26 +995,81 @@ async function probeAudio({ bvid, cid, aid, epId }) {
 const tasks = new Map();
 let taskSeq = 0;
 
+// 终态任务才允许被回收；活跃任务（queued/resolving/downloading/merging）永不自动删除。
+const TASK_TERMINAL = new Set(['done', 'error', 'canceled']);
+const MAX_TASKS = 80;
+
 function newTask(meta) {
   const id = `t${++taskSeq}_${Date.now().toString(36)}`;
   const task = {
     id,
-    status: 'pending', // pending | downloading | done | error | canceled
+    // pending | queued | resolving | downloading | merging | done | error | canceled
+    status: 'pending',
     downloaded: 0,
     total: 0,
     speed: 0,
     error: '',
     startedAt: Date.now(),
     finishedAt: 0,
+    _res: null, // 进行中的下载流，取消时用来中断
+    _ffmpeg: null, // 进行中的 ffmpeg 子进程，取消时用来终止
     ...meta,
   };
   tasks.set(id, task);
-  // 只保留最近 80 条，防止内存无限增长
-  if (tasks.size > 80) {
-    const oldest = [...tasks.values()].sort((a, b) => a.startedAt - b.startedAt)[0];
-    if (oldest && oldest.status !== 'downloading') tasks.delete(oldest.id);
-  }
+  pruneTasks();
   return task;
+}
+
+/** 超过上限时只按「终态 + 最旧」回收，活跃任务一条都不动 */
+function pruneTasks() {
+  if (tasks.size <= MAX_TASKS) return;
+  const terminal = [...tasks.values()]
+    .filter((t) => TASK_TERMINAL.has(t.status))
+    .sort((a, b) => a.startedAt - b.startedAt);
+  for (const t of terminal) {
+    if (tasks.size <= MAX_TASKS) break;
+    tasks.delete(t.id);
+  }
+}
+
+/** 已取消就抛错，阻止后续流程把状态又改回 downloading/done */
+function ensureActive(task) {
+  if (task.status === 'canceled') {
+    const e = new Error('已取消');
+    e.canceled = true;
+    throw e;
+  }
+}
+
+/** 标记任务为已取消，并尽力中断它正在做的事 */
+function cancelTask(t) {
+  if (!t || TASK_TERMINAL.has(t.status)) return false;
+
+  t.status = 'canceled';
+  t.finishedAt = Date.now();
+  t.speed = 0;
+
+  // 还在等待队列里：直接摘掉，避免之后又被启动
+  const qi = downloadQueue.findIndex((x) => x.taskId === t.id);
+  if (qi >= 0) {
+    const [item] = downloadQueue.splice(qi, 1);
+    try { item.resolve(); } catch {}
+  }
+
+  // 中断进行中的下载流
+  if (t._res) {
+    try { t._res.destroy(); } catch {}
+  }
+
+  // 终止 ffmpeg 合并进程
+  if (t._ffmpeg) {
+    try { t._ffmpeg.kill('SIGKILL'); } catch {}
+  }
+
+  // 释放文件名预留，避免长期运行后集合无限增长
+  if (t.filePath) reservedPaths.delete(t.filePath);
+
+  return true;
 }
 
 /* ---- 并发闸门：批量下载时最多同时跑 3 个，避免触发 B 站风控 ---- */
@@ -1023,10 +1078,11 @@ const MAX_ACTIVE_DOWNLOADS = 3;
 let activeDownloads = 0;
 const downloadQueue = [];
 
-/** 把一段下载流程排进队列，返回 Promise（流程自身负责写 task 状态） */
-function enqueueDownload(runFn) {
+/** 把一段下载流程排进队列，返回 Promise（流程自身负责写 task 状态）。
+ *  第一个参数是任务对象：取消时按 task.id 把还在排队的任务直接摘掉。 */
+function enqueueDownload(task, runFn) {
   return new Promise((resolve) => {
-    downloadQueue.push({ runFn, resolve });
+    downloadQueue.push({ runFn, resolve, taskId: task && task.id });
     drainQueue();
   });
 }
@@ -1118,6 +1174,7 @@ function streamToFile(urlStr, filePath, task, onDone) {
     const cleanup = (err) => {
       clearInterval(timer);
       task.speed = 0;
+      task._res = null;
       try {
         out.close();
       } catch {}
@@ -1139,6 +1196,7 @@ function streamToFile(urlStr, filePath, task, onDone) {
         // DASH 分段下载时会预先设好总大小（视频+音频），这里不要覆盖
         const len = parseInt(res.headers['content-length'] || '0', 10) || 0;
         if (len && !task.total) task.total = len;
+        task._res = res; // 取消时可立即中断这条流
         res.on('data', (chunk) => {
           task.downloaded += chunk.length;
           if (task.status === 'canceled') {
@@ -1151,6 +1209,7 @@ function streamToFile(urlStr, filePath, task, onDone) {
         out.on('finish', () => {
           clearInterval(timer);
           task.speed = 0;
+          task._res = null;
           // 用户取消时不要留下半截文件
           if (task.status === 'canceled') {
             fsp.unlink(tmp).catch(() => {});
@@ -1209,7 +1268,7 @@ async function headSize(urlStr, guard = null) {
 }
 
 /** 用 ffmpeg 把分离的音视频流无损封装成一个 mp4（-c copy，不重新编码） */
-function mergeStreams(videoPath, audioPath, outPath) {
+function mergeStreams(videoPath, audioPath, outPath, task) {
   return new Promise((resolve, reject) => {
     if (!FFMPEG_PATH) {
       return reject(new Error('未找到 ffmpeg，无法合并高清音视频'));
@@ -1224,12 +1283,15 @@ function mergeStreams(videoPath, audioPath, outPath) {
       outPath,
     ];
 
-    execFile(
+    const child = execFile(
       FFMPEG_PATH,
       args,
       { timeout: 20 * 60 * 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
       (err, stdout, stderr) => {
+        if (task) task._ffmpeg = null;
         if (err) {
+          // 用户取消导致的中断不算失败
+          if (task && task.status === 'canceled') return reject(new Error('已取消'));
           const tail = String(stderr || err.message)
             .split('\n')
             .filter(Boolean)
@@ -1240,6 +1302,8 @@ function mergeStreams(videoPath, audioPath, outPath) {
         resolve();
       }
     );
+    // 注册子进程，取消时直接 kill
+    if (task) task._ffmpeg = child;
   });
 }
 
@@ -1270,18 +1334,8 @@ async function withRetry(fn, { times = 2, shouldStop } = {}) {
  * 前端已解析过视频，直接带 bvid/aid/epId/cid 过来，这里不再重复调 view 接口。
  * 「取地址 + 下载」整段流程进并发队列，批量下载时不会瞬间打满接口。
  */
-async function startVideoDownload({
-  input,
-  bvid,
-  aid,
-  epId,
-  cid,
-  qn,
-  title,
-  part,
-  index,
-  pageCount,
-}) {
+async function startVideoDownload(opts) {
+  const { input, bvid, aid, epId, cid, qn, title, part, index, pageCount } = opts || {};
   if (!cid) throw new Error('缺少分 P 信息，请先解析视频');
   if (!bvid && !aid && !epId) throw new Error('缺少视频标识，请重新解析');
 
@@ -1295,8 +1349,9 @@ async function startVideoDownload({
     quality: QN_LABEL[qn] || `${qn}`,
     status: 'queued',
   });
+  task.retry = { kind: 'video', payload: { ...(opts || {}) } };
 
-  enqueueDownload(async () => {
+  enqueueDownload(task, async () => {
     try {
       task.status = 'resolving';
 
@@ -1345,22 +1400,30 @@ async function startVideoDownload({
         task.filename = path.basename(filePath);
         task.filePath = filePath;
         task.quality = qLabel;
-        task.status = 'downloading';
 
         const tmpV = filePath + '.v.part';
         const tmpA = filePath + '.a.part';
 
-        // 先算出两段流的总大小，进度条才不会在第二段跳回去
-        const total = (await headSize(vUrl)) + (await headSize(aUrl));
-        if (total) task.total = total;
+        try {
+          ensureActive(task);
+          task.status = 'downloading';
 
-        await streamToFile(vUrl, tmpV, task);
-        await streamToFile(aUrl, tmpA, task);
+          // 先算出两段流的总大小，进度条才不会在第二段跳回去
+          const total = (await headSize(vUrl)) + (await headSize(aUrl));
+          if (total) task.total = total;
 
-        task.status = 'merging';
-        await mergeStreams(tmpV, tmpA, filePath);
-        await fsp.unlink(tmpV).catch(() => {});
-        await fsp.unlink(tmpA).catch(() => {});
+          await streamToFile(vUrl, tmpV, task);
+          ensureActive(task); // 视频流下完若已取消，不再继续下音频
+          await streamToFile(aUrl, tmpA, task);
+          ensureActive(task);
+
+          task.status = 'merging';
+          await mergeStreams(tmpV, tmpA, filePath, task);
+        } finally {
+          // 成功、失败、取消都清掉临时分片（成功时成品已在 filePath）
+          await fsp.unlink(tmpV).catch(() => {});
+          await fsp.unlink(tmpA).catch(() => {});
+        }
       } else {
         /* ---------- 常规：DURL 单文件（音视频已合并） ---------- */
         const d = await biliApi(endpoint, {
@@ -1385,6 +1448,7 @@ async function startVideoDownload({
         task.filename = path.basename(filePath);
         task.filePath = filePath;
         task.quality = qLabel;
+        ensureActive(task);
         task.status = 'downloading';
 
         if (urls.length === 1) {
@@ -1409,6 +1473,7 @@ async function startVideoDownload({
         }
       }
 
+      ensureActive(task);
       task.status = 'done';
       task.total = task.total || task.downloaded;
     } catch (e) {
@@ -1419,6 +1484,10 @@ async function startVideoDownload({
     } finally {
       task.finishedAt = Date.now();
       task.speed = 0;
+      task._res = null;
+      task._ffmpeg = null;
+      // 任务结束即释放文件名预留（文件若已落盘，uniquePath 会靠磁盘检查避开同名）
+      if (task.filePath) reservedPaths.delete(task.filePath);
     }
   });
 
@@ -1430,17 +1499,8 @@ async function startVideoDownload({
  * B 站的 DASH 音频轨是标准 fMP4（ftyp + moov 在前），落地为 .m4a 后主流播放器可直接播放，
  * 因此不需要 ffmpeg 转码。
  */
-async function startAudioDownload({
-  bvid,
-  aid,
-  epId,
-  cid,
-  audioId,
-  title,
-  part,
-  index,
-  pageCount,
-}) {
+async function startAudioDownload(opts) {
+  const { bvid, aid, epId, cid, audioId, title, part, index, pageCount } = opts || {};
   if (!cid) throw new Error('缺少分 P 信息，请先解析视频');
 
   await ensureDownloadDir();
@@ -1453,8 +1513,9 @@ async function startAudioDownload({
     quality: AUDIO_LABEL[audioId] || '音频',
     status: 'queued',
   });
+  task.retry = { kind: 'audio', payload: { ...(opts || {}) } };
 
-  enqueueDownload(async () => {
+  enqueueDownload(task, async () => {
     try {
       task.status = 'resolving';
 
@@ -1501,6 +1562,7 @@ async function startAudioDownload({
         { times: 2, shouldStop: () => task.status === 'canceled' }
       );
 
+      ensureActive(task);
       task.status = 'done';
       task.total = task.total || task.downloaded;
     } catch (e) {
@@ -1511,6 +1573,9 @@ async function startAudioDownload({
     } finally {
       task.finishedAt = Date.now();
       task.speed = 0;
+      task._res = null;
+      task._ffmpeg = null;
+      if (task.filePath) reservedPaths.delete(task.filePath);
     }
   });
 
@@ -1540,7 +1605,8 @@ function appendSegment(urlStr, fd, task) {
   });
 }
 
-async function startCoverDownload({ url, title }) {
+async function startCoverDownload(opts) {
+  const { url, title } = opts || {};
   if (!url) throw new Error('缺少封面地址');
   await ensureDownloadDir();
 
@@ -1556,18 +1622,25 @@ async function startCoverDownload({ url, title }) {
     filePath,
     quality: '原图',
   });
+  task.retry = { kind: 'cover', payload: { ...(opts || {}) } };
   task.status = 'downloading';
 
   (async () => {
     try {
       await streamToFile(clean, filePath, task);
+      ensureActive(task);
       task.status = 'done';
       task.finishedAt = Date.now();
       task.total = task.total || task.downloaded;
     } catch (e) {
-      task.status = 'error';
-      task.error = e.message;
+      if (task.status !== 'canceled') {
+        task.status = 'error';
+        task.error = e.message;
+      }
       task.finishedAt = Date.now();
+    } finally {
+      task._res = null;
+      reservedPaths.delete(filePath);
     }
   })();
 
@@ -2000,11 +2073,31 @@ async function handleApi(req, res, url) {
     /* ---------- 取消任务 ---------- */
     if (p === '/api/cancel') {
       const t = tasks.get(q.get('id'));
-      if (t && t.status === 'downloading') {
-        t.status = 'canceled';
-        t.finishedAt = Date.now();
+      const canceled = cancelTask(t);
+      return sendJSON(res, 200, { ok: true, data: { canceled } });
+    }
+
+    /* ---------- 取消全部进行中的任务 ---------- */
+    if (p === '/api/cancel-all') {
+      let canceled = 0;
+      for (const t of tasks.values()) {
+        if (cancelTask(t)) canceled++;
       }
-      return sendJSON(res, 200, { ok: true });
+      return sendJSON(res, 200, { ok: true, data: { canceled } });
+    }
+
+    /* ---------- 重试失败/已取消的任务（复用原始参数，新建一条任务） ---------- */
+    if (p === '/api/retry') {
+      const t = tasks.get(q.get('id'));
+      if (!t || !t.retry) {
+        return sendJSON(res, 400, { ok: false, error: '该任务不可重试' });
+      }
+      const { kind, payload } = t.retry;
+      let nt;
+      if (kind === 'video') nt = await startVideoDownload(payload);
+      else if (kind === 'audio') nt = await startAudioDownload(payload);
+      else nt = await startCoverDownload(payload);
+      return sendJSON(res, 200, { ok: true, data: publicTask(nt) });
     }
 
     /* ---------- 封面代理（用于页面内预览，绕过防盗链） ---------- */
@@ -2208,8 +2301,10 @@ async function handleApi(req, res, url) {
       return sendJSON(res, 200, {
         ok: true,
         data: {
-          localOnly: true, // 只监听 127.0.0.1
-          hostGuard: true, // Host 必须是本机地址
+          // 按真实监听地址报告：本机版只听 127.0.0.1，演示版需要监听 0.0.0.0 供容器转发
+          localOnly: !DEMO,
+          listenHost: DEMO ? '0.0.0.0' : '127.0.0.1',
+          hostGuard: !DEMO, // 演示版域名由平台分配，Host 无法预枚举
           originGuard: true, // 跨站写操作被拒
           csp: true, // 严格内容安全策略
           rateLimit: RATE_LIMIT,
@@ -2255,6 +2350,7 @@ function publicTask(t) {
     quality: t.quality,
     startedAt: t.startedAt,
     finishedAt: t.finishedAt,
+    canCancel: !TASK_TERMINAL.has(t.status),
   };
 }
 
