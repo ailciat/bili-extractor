@@ -147,7 +147,23 @@ npm run app:zip  # 套一层英文名 zip
 npm run pack     # 打轻量便携包
 ```
 
-Windows exe 通过 [Build exe](https://github.com/ailciat/bili-extractor/actions/workflows/build-exe.yml) 工作流手动触发，产物自动发布到 Releases。发布包用英文名 zip、内部保留中文 exe，是因为 GitHub 上传资源时会吞掉文件名里的中文前缀。
+Windows 构建有两条入口，互不干扰：
+
+| 场景 | 触发方式 | 结果 |
+| --- | --- | --- |
+| 日常测试 | Actions 里手动运行 **Build exe** | 构建 + 校验 + 上传 Artifact（不碰 Release） |
+| 正式发布 | 推送 `v*` 版本 Tag | 构建 + 校验 + 自动创建 Release 并附带 `SHA256SUMS.txt` |
+
+发布步骤：改版本号 → 提交推送 → 打 Tag 推送。
+
+```bash
+npm version 2.1.0 --no-git-tag-version   # 同步 package.json 与 lock
+git add package.json package-lock.json && git commit -m "chore: release v2.1.0"
+git push origin main
+git tag -a v2.1.0 -m "哔哩提取器 v2.1.0" && git push origin v2.1.0
+```
+
+Tag 必须与 `package.json` 版本一致，工作流会校验，不一致直接失败。发布包用英文名 zip、内部保留中文 exe，是因为 GitHub 上传资源时会吞掉文件名里的中文前缀。
 
 ---
 

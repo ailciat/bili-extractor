@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       # 不需要 npm install：自检只读源码，
       # 二维码库与 ffmpeg 都是按需加载的，CI 里不会真的下视频

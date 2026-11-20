@@ -1,28 +1,40 @@
 name: Build exe
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
+
+# 默认最小权限；只有 publish 任务才临时提权
+permissions:
+  contents: read
+
+# 同一版本不并发发布
+concurrency:
+  group: build-exe-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    name: 打包 Windows 免安装版
+    name: 构建 Windows EXE
     runs-on: windows-latest
     permissions:
-      contents: write   # 允许推送 tag 与创建 Release
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
-
-      - name: 语法 / DOM id / CSS 变量 / CSP
-        run: node scripts/ci-check.js
 
       - name: 安装依赖
         run: npm ci
+
+      - name: 静态自检（语法 / DOM id / CSS 变量 / CSP）
+        run: npm run check
 
       - name: 打包 portable exe
         run: npm run app:pack
@@ -30,60 +42,71 @@ jobs:
       - name: 打成英文名 zip（内部保留中文 exe）
         run: npm run app:zip
 
-      - name: 上传 zip（Actions artifact）
+      - name: 校验产物并生成 SHA256
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+
+          # 打 tag 发布时，tag 必须与 package.json 版本一致，避免误覆盖旧版本
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag ($env:GITHUB_REF_NAME) 与 package.json 版本 (v$version) 不一致"
+          }
+
+          $zip = "dist/bili-extractor-$version-win-x64.zip"
+          if (!(Test-Path -LiteralPath $zip)) {
+            throw "ZIP 文件不存在: $zip"
+          }
+
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $zip -Leaf)" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Write-Host "ZIP: $zip"
+          Write-Host "SHA256: $hash"
+
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: bili-extractor-win-x64
-          path: dist/bili-extractor-*-win-x64.zip
+          name: bili-extractor-${{ github.ref_name }}-win-x64
+          path: |
+            dist/bili-extractor-*-win-x64.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error
+          retention-days: 14
 
-      - name: 发布到 Releases
-        # 资源名用纯英文名：GitHub 的 upload 端点会剥掉非 ASCII 前缀。
-        # 中文名保留在 zip 内部的 exe 上（UTF-8 标志写入），解压即得中文程序。
-        shell: bash
+  publish:
+    name: 发布 GitHub Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: bili-extractor-${{ github.ref_name }}-win-x64
+          path: dist
+
+      - name: 发布 Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const ver = require('./package.json').version;
-          const tag = 'v' + ver;
-          const zipName = 'bili-extractor-' + ver + '-win-x64.zip';
-          const token = process.env.GH_TOKEN;
-          const H = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-          const api = 'https://api.github.com/repos/ailciat/bili-extractor';
+          set -euo pipefail
 
-          async function main() {
-            let rel;
-            const get = await fetch(api + '/releases/tags/' + tag, { headers: H });
-            if (get.ok) {
-              rel = await get.json();
-            } else {
-              const post = await fetch(api + '/releases', {
-                method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  tag_name: tag,
-                  name: '哔哩提取器 ' + tag,
-                  body: '免安装 Windows 版，下载 zip 解压后双击「哔哩提取器-' + ver + '-win-x64.exe」即用，无需安装、无需 Node。首次运行若提示 SmartScreen，点「更多信息 → 仍要运行」即可。'
-                })
-              });
-              if (!post.ok) throw new Error('创建 Release 失败 ' + post.status + ' ' + await post.text());
-              rel = await post.json();
-            }
-            // 清掉旧资源（含中文名丢失的坏 exe 与旧 zip），保证 Release 只留干净的一个
-            for (const a of rel.assets || []) {
-              await fetch(api + '/releases/assets/' + a.id, { method: 'DELETE', headers: H });
-            }
-            if (!fs.existsSync('dist/' + zipName)) throw new Error('dist 下没有 ' + zipName);
-            const buf = fs.readFileSync('dist/' + zipName);
-            const url = rel.upload_url.split('{')[0] + '?name=' + zipName;
-            const up = await fetch(url, {
-              method: 'POST',
-              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/zip', 'Content-Length': String(buf.length) },
-              body: buf
-            });
-            if (!up.ok) throw new Error('上传失败 ' + up.status + ' ' + await up.text());
-            console.log('已发布到 Releases: ' + (await up.json()).name + '（内部 exe 为中文名）');
-          }
-          main().catch(e => { console.error(e); process.exit(1); });
-          NODE
+          VERSION="${TAG#v}"
+          ZIP="dist/bili-extractor-${VERSION}-win-x64.zip"
+
+          # 先确认产物齐全，再动 Release —— 顺序反了会出现「附件删了但新包没传上」
+          test -s "$ZIP"
+          test -s "dist/SHA256SUMS.txt"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 只替换同名附件，保留 Release 的其他资源与说明
+            gh release upload "$TAG" "$ZIP" dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" "$ZIP" dist/SHA256SUMS.txt \
+              --title "哔哩提取器 $TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
