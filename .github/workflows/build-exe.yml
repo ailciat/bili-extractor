@@ -81,6 +81,11 @@ jobs:
       contents: write
 
     steps:
+      # gh 需要 git 上下文才能推断仓库、生成更新说明
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 下载构建产物
         uses: actions/download-artifact@v4
         with:
@@ -90,6 +95,7 @@ jobs:
       - name: 发布 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
