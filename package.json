@@ -1,6 +1,6 @@
 {
   "name": "bili-extractor",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "提炼 · B站视频 / 音频 / 封面提取工具",
   "main": "electron/main.js",
