@@ -141,6 +141,7 @@ bili-extractor/
 
 ```bash
 npm run check    # 静态自检：JS 语法、DOM id 引用、CSS 变量、内联脚本
+npm test         # 接口级测试：起隔离实例（临时数据目录），覆盖安全/任务/演示模式
 npm run app      # Electron 独立窗口
 npm run app:pack # 打中文名 exe（需 Windows）
 npm run app:zip  # 套一层英文名 zip

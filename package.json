@@ -12,6 +12,7 @@
     "start": "node server.js",
     "app": "electron .",
     "check": "node scripts/ci-check.js",
+    "test": "node --test \"tests/**/*.test.js\"",
     "pack": "node scripts/pack.js",
     "app:pack": "electron-builder --win portable",
     "app:zip": "node scripts/make-zip.js",

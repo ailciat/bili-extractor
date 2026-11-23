@@ -266,7 +266,12 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 
 // 桌面版跑在 exe 的临时解压目录里，配置和下载必须落到用户目录，退出后才不会丢
 const PACKAGED = process.env.ELECTRON_RUN_AS_NODE === '1' || process.env.BILI_APP_IPC === '1';
-const DATA_ROOT = PACKAGED ? path.join(os.homedir(), '.bili-extractor') : ROOT;
+// BILI_DATA_ROOT 仅用于测试/便携场景：把配置与下载隔离到指定目录，避免碰用户真实数据
+const DATA_ROOT = process.env.BILI_DATA_ROOT
+  ? path.resolve(process.env.BILI_DATA_ROOT)
+  : PACKAGED
+    ? path.join(os.homedir(), '.bili-extractor')
+    : ROOT;
 const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
 const DEFAULT_DOWNLOAD_DIR = path.join(DATA_ROOT, 'downloads');
 
@@ -1153,12 +1158,28 @@ async function uniquePath(dir, filename) {
 /**
  * 把远端流写入本地文件。
  * 先写 .part 临时文件，完成后改名，避免中断留下半截文件。
+ * opts.resume=true 时：若 .part 已存在且服务器支持 Range，就从断点续传；
+ * 结束后按 Content-Length 校验大小，防止「看起来下完了其实是残包」。
  */
-function streamToFile(urlStr, filePath, task, onDone) {
+function streamToFile(urlStr, filePath, task, opts = {}) {
+  const allowResume = Boolean(opts.resume);
+
   return new Promise((resolve, reject) => {
     const tmp = filePath + '.part';
-    const out = fs.createWriteStream(tmp);
-    let lastBytes = 0;
+    // base：本条流开始前已经下载的字节数（DASH 第二段要接着第一段的进度算）
+    const base = Math.max(0, Number(opts.base) || 0);
+
+    let startAt = 0;
+    if (allowResume) {
+      try {
+        startAt = fs.statSync(tmp).size;
+      } catch {
+        startAt = 0;
+      }
+    }
+
+    let out = null;
+    let lastBytes = startAt;
     let lastTime = Date.now();
 
     const timer = setInterval(() => {
@@ -1176,27 +1197,53 @@ function streamToFile(urlStr, filePath, task, onDone) {
       task.speed = 0;
       task._res = null;
       try {
-        out.close();
+        if (out) out.close();
       } catch {}
-      fsp.unlink(tmp).catch(() => {});
+      // 取消时不留半截；普通失败保留分片，下次可续传
+      if (task.status === 'canceled') fsp.unlink(tmp).catch(() => {});
       reject(err);
     };
 
-    requestGet(urlStr, {
+    const headers = {
       Referer: 'https://www.bilibili.com/',
       Origin: 'https://www.bilibili.com',
       Accept: '*/*',
       'Accept-Encoding': 'identity',
-    })
+    };
+    if (startAt > 0) headers.Range = `bytes=${startAt}-`;
+
+    requestGet(urlStr, headers)
       .then((res) => {
+        task._res = res;
+
+        // Range 起点越界：说明分片其实已经下全，直接收尾
+        if (res.statusCode === 416 && startAt > 0) {
+          res.resume();
+          clearInterval(timer);
+          task._res = null;
+          task.speed = 0;
+          return fs.rename(tmp, filePath, (err) => (err ? reject(err) : resolve()));
+        }
+
         if (res.statusCode >= 400) {
           res.resume();
           return cleanup(new Error(`下载失败，HTTP ${res.statusCode}`));
         }
+
+        // 服务器忽略 Range 回了 200：必须从头写，不能追加
+        if (startAt > 0 && res.statusCode !== 206) {
+          startAt = 0;
+        }
+        task.downloaded = base + startAt;
+
         // DASH 分段下载时会预先设好总大小（视频+音频），这里不要覆盖
         const len = parseInt(res.headers['content-length'] || '0', 10) || 0;
-        if (len && !task.total) task.total = len;
-        task._res = res; // 取消时可立即中断这条流
+        if (len && !task.total) task.total = base + startAt + len;
+
+        out = fs.createWriteStream(tmp, startAt > 0 ? { flags: 'a' } : { flags: 'w' });
+        lastBytes = base + startAt;
+        lastTime = Date.now();
+
         res.on('data', (chunk) => {
           task.downloaded += chunk.length;
           if (task.status === 'canceled') {
@@ -1214,6 +1261,12 @@ function streamToFile(urlStr, filePath, task, onDone) {
           if (task.status === 'canceled') {
             fsp.unlink(tmp).catch(() => {});
             return reject(new Error('已取消'));
+          }
+          // 大小校验：Content-Length 已知时，落地字节数必须吻合
+          if (len && task.downloaded !== base + startAt + len) {
+            return cleanup(
+              new Error(`文件不完整（${task.downloaded}/${base + startAt + len} 字节）`)
+            );
           }
           fs.rename(tmp, filePath, (err) => {
             if (err) return reject(err);
@@ -1403,6 +1456,7 @@ async function startVideoDownload(opts) {
 
         const tmpV = filePath + '.v.part';
         const tmpA = filePath + '.a.part';
+        let mergedOk = false;
 
         try {
           ensureActive(task);
@@ -1412,17 +1466,32 @@ async function startVideoDownload(opts) {
           const total = (await headSize(vUrl)) + (await headSize(aUrl));
           if (total) task.total = total;
 
-          await streamToFile(vUrl, tmpV, task);
+          const stop = () => task.status === 'canceled';
+
+          // 两段流各自独立重试 + 断点续传：视频失败不必重下音频，反之亦然
+          await withRetry(() => streamToFile(vUrl, tmpV, task, { resume: true }), {
+            times: 3,
+            shouldStop: stop,
+          });
+
+          const videoBytes = task.downloaded;
           ensureActive(task); // 视频流下完若已取消，不再继续下音频
-          await streamToFile(aUrl, tmpA, task);
+
+          await withRetry(
+            () => streamToFile(aUrl, tmpA, task, { resume: true, base: videoBytes }),
+            { times: 3, shouldStop: stop }
+          );
           ensureActive(task);
 
           task.status = 'merging';
           await mergeStreams(tmpV, tmpA, filePath, task);
+          mergedOk = true;
         } finally {
-          // 成功、失败、取消都清掉临时分片（成功时成品已在 filePath）
-          await fsp.unlink(tmpV).catch(() => {});
-          await fsp.unlink(tmpA).catch(() => {});
+          // 成功或取消才清分片；合并失败保留 .v/.a，重试时能直接续传
+          if (mergedOk || task.status === 'canceled') {
+            await fsp.unlink(tmpV).catch(() => {});
+            await fsp.unlink(tmpA).catch(() => {});
+          }
         }
       } else {
         /* ---------- 常规：DURL 单文件（音视频已合并） ---------- */
@@ -1454,12 +1523,11 @@ async function startVideoDownload(opts) {
         if (urls.length === 1) {
           await withRetry(
             () => {
-              // 重试要从零开始统计，否则进度会跳
-              task.downloaded = 0;
+              // 进度按分片实际大小重算，续传时不会跳
               task.total = 0;
-              return streamToFile(urls[0], filePath, task);
+              return streamToFile(urls[0], filePath, task, { resume: true });
             },
-            { times: 2, shouldStop: () => task.status === 'canceled' }
+            { times: 3, shouldStop: () => task.status === 'canceled' }
           );
         } else {
           // 极少数老视频是多段分片，按顺序写入同一文件
@@ -1555,11 +1623,10 @@ async function startAudioDownload(opts) {
 
       await withRetry(
         () => {
-          task.downloaded = 0;
           task.total = 0;
-          return streamToFile(url, filePath, task);
+          return streamToFile(url, filePath, task, { resume: true });
         },
-        { times: 2, shouldStop: () => task.status === 'canceled' }
+        { times: 3, shouldStop: () => task.status === 'canceled' }
       );
 
       ensureActive(task);
@@ -1627,7 +1694,7 @@ async function startCoverDownload(opts) {
 
   (async () => {
     try {
-      await streamToFile(clean, filePath, task);
+      await streamToFile(clean, filePath, task, { resume: true });
       ensureActive(task);
       task.status = 'done';
       task.finishedAt = Date.now();

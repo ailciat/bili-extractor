@@ -21,3 +21,7 @@ jobs:
       # 二维码库与 ffmpeg 都是按需加载的，CI 里不会真的下视频
       - name: 语法 / DOM id / CSS 变量 / CSP
         run: node scripts/ci-check.js
+
+      # 接口级测试：测试内会起隔离实例（BILI_DATA_ROOT 指向临时目录），不碰真实配置
+      - name: 自动化测试
+        run: npm test
