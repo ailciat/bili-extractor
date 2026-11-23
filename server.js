@@ -311,6 +311,14 @@ let config = { ...defaultConfig };
 
 const SECRET_SALT = 'bili-extractor::credential::v1';
 
+/**
+ * 系统级主密钥：由 Electron 主进程用 safeStorage（Windows DPAPI / macOS Keychain /
+ * Linux Secret Service）保管，启动时经 IPC 下发一次。
+ * 拿不到就退回旧方案（主机名+用户名派生），保证命令行直跑仍可用。
+ */
+let MASTER_KEY = null;
+const SECRET_STATE = { store: 'derived' };
+
 function deriveKey() {
   let user = '';
   try {
@@ -322,12 +330,29 @@ function deriveKey() {
   return crypto.pbkdf2Sync(seed, SECRET_SALT, 120000, 32, 'sha256');
 }
 
+function activeKey() {
+  return MASTER_KEY || deriveKey();
+}
+
+function tryDecryptWith(key, buf) {
+  try {
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const data = buf.subarray(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
 /** 加密成 base64(iv + tag + ciphertext) */
 function encryptSecret(plain) {
   if (!plain) return '';
   try {
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(), iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', activeKey(), iv);
     const body = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
     return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64');
   } catch {
@@ -335,21 +360,33 @@ function encryptSecret(plain) {
   }
 }
 
-function decryptSecret(payload) {
-  if (!payload) return '';
+/**
+ * 解密并标记来源：via=os 表示用系统密钥解开，via=derived 表示旧派生密钥。
+ * 后者说明需要重加密迁移到系统密钥。
+ */
+function decryptSecretEx(payload) {
+  if (!payload) return { plain: '', via: '' };
   try {
     const buf = Buffer.from(String(payload), 'base64');
-    if (buf.length < 29) return '';
-    const iv = buf.subarray(0, 12);
-    const tag = buf.subarray(12, 28);
-    const data = buf.subarray(28);
-    const decipher = crypto.createDecipheriv('aes-256-gcm', deriveKey(), iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+    if (buf.length < 29) return { plain: '', via: '' };
+
+    if (MASTER_KEY) {
+      const withOs = tryDecryptWith(MASTER_KEY, buf);
+      if (withOs) return { plain: withOs, via: 'os' };
+    }
+
+    const withDerived = tryDecryptWith(deriveKey(), buf);
+    if (withDerived) return { plain: withDerived, via: 'derived' };
+
+    return { plain: '', via: '' };
   } catch {
     // 换机器、换用户、文件被改动都会走到这里
-    return '';
+    return { plain: '', via: '' };
   }
+}
+
+function decryptSecret(payload) {
+  return decryptSecretEx(payload).plain;
 }
 
 /** 尽量把配置文件设成「只有当前用户可读写」 */
@@ -376,7 +413,52 @@ function tightenConfigPermissions() {
   }
 }
 
-let needsSecretMigration = false;
+let needsSecretMigration = false; // 旧版明文 cookie → 密文
+let needsReencrypt = false; // 旧派生密钥 → 系统密钥
+
+/** 向 Electron 主进程索取系统级主密钥（没有 IPC 就返回 null） */
+function requestParentKey(timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    if (typeof process.send !== 'function') return resolve(null);
+
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      process.removeListener('message', onMessage);
+      resolve(v);
+    };
+    const onMessage = (msg) => {
+      if (!msg || msg.type !== 'secret:key:reply') return;
+      finish(typeof msg.key === 'string' && msg.key ? msg.key : null);
+    };
+
+    process.on('message', onMessage);
+    try {
+      process.send({ type: 'secret:key:request' });
+    } catch {
+      return finish(null);
+    }
+    setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
+async function initSecretKey() {
+  const b64 = await requestParentKey();
+  if (!b64) {
+    SECRET_STATE.store = 'derived';
+    return;
+  }
+  try {
+    const key = Buffer.from(b64, 'base64');
+    if (key.length !== 32) throw new Error('密钥长度异常');
+    MASTER_KEY = key;
+    SECRET_STATE.store = 'os';
+  } catch {
+    MASTER_KEY = null;
+    SECRET_STATE.store = 'derived';
+  }
+}
 
 function loadConfig() {
   try {
@@ -386,12 +468,15 @@ function loadConfig() {
     config = { ...defaultConfig, ...saved };
 
     // 密文优先；兼容早期明文 cookie 的旧文件，并在启动时自动迁移成密文
-    config.cookie = decryptSecret(saved.cookieEnc) || saved.cookie || '';
+    const dec = decryptSecretEx(saved.cookieEnc);
+    config.cookie = dec.plain || saved.cookie || '';
     delete config.cookieEnc;
 
     SECURITY_STATE.credentialEncrypted = Boolean(saved.cookieEnc);
 
     if (saved.cookie && !saved.cookieEnc) needsSecretMigration = true;
+    // 能用系统密钥解开却仍是旧派生密钥加密的，启动后重加密一次
+    if (dec.via === 'derived' && MASTER_KEY) needsReencrypt = true;
 
     if (!config.downloadDir) config.downloadDir = DEFAULT_DOWNLOAD_DIR;
   } catch {
@@ -2378,6 +2463,7 @@ async function handleApi(req, res, url) {
           rateWindow: Math.round(RATE_WINDOW / 1000),
           hasCredential: Boolean(config.cookie),
           credentialEncrypted: SECURITY_STATE.credentialEncrypted,
+          credentialStore: SECRET_STATE.store, // os = 系统密钥，derived = 旧派生方案
           configPerm: SECURITY_STATE.configPerm,
         },
       });
@@ -2469,7 +2555,9 @@ function openBrowser(target) {
   openLocalTarget(target).catch(() => {});
 }
 
-function main() {
+async function main() {
+  // 先拿系统钥匙再读配置，否则旧密文会被当成"解不开"
+  await initSecretKey();
   loadConfig();
   initFFmpeg();
 
@@ -2489,6 +2577,20 @@ function main() {
     saveConfig()
       .then(() => console.log('  已把登录凭证加密保存。'))
       .catch(() => {});
+  }
+
+  // 旧派生密钥 → 系统密钥：先备份，再重写；失败就保持原样，不冒险覆盖
+  if (needsReencrypt && !DEMO && config.cookie) {
+    (async () => {
+      try {
+        const bak = CONFIG_PATH + '.bak';
+        if (!fs.existsSync(bak)) fs.copyFileSync(CONFIG_PATH, bak);
+        await saveConfig();
+        console.log('  已把登录凭证迁移到系统级密钥（备份 config.json.bak）。');
+      } catch {
+        /* 迁移失败不影响使用，下次启动重试 */
+      }
+    })();
   }
 
   const server = http.createServer(async (req, res) => {

@@ -1,6 +1,8 @@
-const { app, BrowserWindow, shell, dialog } = require('electron');
+const { app, BrowserWindow, shell, dialog, safeStorage } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 7788);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -9,8 +11,52 @@ let serverProc = null;
 let win = null;
 let listenUrl = null;
 
+/**
+ * 主密钥：用系统级安全存储（Win DPAPI / macOS Keychain / Linux Secret Service）保管。
+ * 只在本机可用；不可用就返回 null，由子进程退回旧的派生方案。
+ * Electron 45 起同步 API 已废弃，这里优先走 async 版本。
+ */
+async function loadOrCreateMasterKey() {
+  try {
+    const available = safeStorage.isAsyncEncryptionAvailable
+      ? await safeStorage.isAsyncEncryptionAvailable()
+      : safeStorage.isEncryptionAvailable();
+    if (!available) return null;
+
+    const keyFile = path.join(app.getPath('userData'), 'credential.key');
+
+    if (fs.existsSync(keyFile)) {
+      try {
+        const buf = Buffer.from(fs.readFileSync(keyFile, 'utf8').trim(), 'base64');
+        const key = safeStorage.decryptStringAsync
+          ? await safeStorage.decryptStringAsync(buf)
+          : safeStorage.decryptString(buf);
+        if (key && Buffer.from(key, 'base64').length === 32) return key;
+      } catch {
+        /* 解不开（换了系统账户/DPAPI 异常）：不覆盖旧文件，回退派生方案 */
+      }
+      return null;
+    }
+
+    const key = crypto.randomBytes(32).toString('base64');
+    const enc = safeStorage.encryptStringAsync
+      ? await safeStorage.encryptStringAsync(key)
+      : safeStorage.encryptString(key);
+
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+    fs.writeFileSync(keyFile, enc.toString('base64'), { mode: 0o600 });
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+let masterKey = null;
+
 /** 用独立的 Node 进程跑本地服务，避免阻塞 Electron 主进程 */
-function startServer() {
+async function startServer() {
+  masterKey = await loadOrCreateMasterKey();
+
   const serverPath = path.join(__dirname, '..', 'server.js');
   serverProc = spawn(process.execPath, [serverPath], {
     env: {
@@ -20,8 +66,19 @@ function startServer() {
       BILI_APP_IPC: '1',       // 让服务回报实际监听地址
       ELECTRON_RUN_AS_NODE: '1',
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
+  });
+
+  // 子进程启动时索取主密钥；加密不可用则回 null，让它走兼容方案
+  serverProc.on('message', (msg) => {
+    if (msg && msg.type === 'secret:key:request') {
+      try {
+        serverProc.send({ type: 'secret:key:reply', key: masterKey || null });
+      } catch {
+        /* 子进程已退出，忽略 */
+      }
+    }
   });
 
   let stdout = '';
@@ -85,8 +142,8 @@ async function createWindow() {
   win.loadURL(listenUrl || BASE);
 }
 
-app.whenReady().then(() => {
-  startServer();
+app.whenReady().then(async () => {
+  await startServer();
   createWindow();
 
   app.on('activate', () => {

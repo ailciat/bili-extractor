@@ -38,9 +38,20 @@ async function ping(port, timeoutMs = 150) {
   }
 }
 
-async function startServer(extraEnv = {}) {
+async function startServer(extraEnv = {}, opts = {}) {
   const port = await getFreePort();
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-test-'));
+
+  // 允许测试预置 config.json 等文件（迁移场景）
+  if (typeof opts.seed === 'function') {
+    try {
+      opts.seed(dataRoot);
+    } catch {}
+  }
+
+  const useIpc = Object.prototype.hasOwnProperty.call(opts, 'ipcKey');
+  const stdio = useIpc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'];
+
   const child = spawn(process.execPath, [SERVER], {
     env: {
       ...process.env,
@@ -49,9 +60,20 @@ async function startServer(extraEnv = {}) {
       BILI_DATA_ROOT: dataRoot,
       ...extraEnv,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio,
     windowsHide: true,
   });
+
+  // 模拟 Electron 主进程：收到索取就下发改系统密钥
+  if (useIpc) {
+    child.on('message', (msg) => {
+      if (msg && msg.type === 'secret:key:request') {
+        try {
+          child.send({ type: 'secret:key:reply', key: opts.ipcKey });
+        } catch {}
+      }
+    });
+  }
 
   let log = '';
   child.stdout.on('data', (d) => (log += d.toString()));

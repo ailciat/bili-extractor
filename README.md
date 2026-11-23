@@ -65,7 +65,7 @@ https://www.bilibili.com/bangumi/play/ep123456
 
 ≤720P 是音视频已合并的单文件；>720P 是 B 站提供的 DASH 分离流，由内置 ffmpeg 无损封装成一个 MP4，无需另行配置。
 
-登录凭证只保存在本机 `config.json`（AES-256-GCM 加密，密钥绑定当前用户与主机），不上传、不发给第三方。无法扫码时可在设置里手动填写 `SESSDATA`。
+登录凭证只保存在本机 `config.json`（AES-256-GCM 加密）。密钥优先由系统级安全存储保管（Windows DPAPI / macOS Keychain / Linux Secret Service），本机不可用时回退为「当前用户 + 主机名」派生，文件拷到别的机器解不开。不上传、不发给第三方。无法扫码时可在设置里手动填写 `SESSDATA`。
 
 ---
 
